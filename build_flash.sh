@@ -10,6 +10,20 @@ MODE="${1:-all}"
 JOBS="${JOBS:-$(nproc)}"
 SWD_SPEED="${SWD_SPEED:-1000}"
 
+# Prefer an ARM GCC already in PATH. If it is not there, also support the
+# toolchain location used on the current Ubuntu machine.
+if ! command -v arm-none-eabi-gcc >/dev/null 2>&1; then
+    for candidate in \
+        "/home/cc/disk/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin" \
+        "$HOME/disk/arm-gnu-toolchain-14.3.rel1-x86_64-arm-none-eabi/bin"
+    do
+        if [[ -x "$candidate/arm-none-eabi-gcc" ]]; then
+            export PATH="$candidate:$PATH"
+            break
+        fi
+    done
+fi
+
 log()
 {
     echo
@@ -39,9 +53,20 @@ check_tools()
 
 configure()
 {
-    # 如果以前错误地使用了电脑本机 GCC，则删除整个构建目录。
+    # 旧 build 可能缓存了已经不存在的 CMake / 编译器绝对路径。
     if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
-        if ! grep -q "arm-none-eabi-gcc" "$BUILD_DIR/CMakeCache.txt"; then
+        local cached_cmake
+        local cached_cc
+        cached_cmake="$(sed -n 's#^CMAKE_COMMAND:INTERNAL=##p' "$BUILD_DIR/CMakeCache.txt" | head -n1)"
+        cached_cc="$(sed -n 's#^CMAKE_C_COMPILER:FILEPATH=##p; s#^CMAKE_C_COMPILER:STRING=##p' "$BUILD_DIR/CMakeCache.txt" | head -n1)"
+
+        if [[ -n "$cached_cmake" && ! -x "$cached_cmake" ]]; then
+            log "检测到旧 CMake 路径已失效，删除 build"
+            rm -rf "$BUILD_DIR"
+        elif [[ -n "$cached_cc" && ! -x "$cached_cc" ]]; then
+            log "检测到旧 ARM GCC 路径已失效，删除 build"
+            rm -rf "$BUILD_DIR"
+        elif ! grep -q "arm-none-eabi-gcc" "$BUILD_DIR/CMakeCache.txt"; then
             log "检测到旧构建目录不是 ARM 编译器，删除 build"
             rm -rf "$BUILD_DIR"
         fi

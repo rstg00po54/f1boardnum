@@ -1,0 +1,48 @@
+MultiPad “方向”板固件
+====================
+
+主控：STM32F103C8T6 (U25)
+USB：PA11=HID_DN(D-)，PA12=HID_DP(D+)
+调试串口：PA9=USART1_TX，PA10=USART1_RX，115200 8N1
+MCP23008：PB8=SCL，PB9=SDA（软件 I2C）
+RGB 数据：PB6 -> R24 -> Q2 反相电平转换 -> 第一颗 6028 DIN
+
+MCP23008 GPIO（按“方向”原理图实际网络）：
+GP0 = R3
+GP1 = R2
+GP2 = R1
+GP3 = R0
+GP4 = C3
+GP5 = C2
+GP6 = C1
+GP7 = C0（这 10 个键未使用）
+
+原理图备注二极管方向为 K2 -> K1，且 K1=ROW、K2=COL。
+因此程序采用：R0~R3 输出逐行拉低，C0~C3 输入上拉读取。
+
+10 键矩阵：
+R0/C1 Insert
+R1/C1 Home
+R2/C1 PageUp
+R0/C2 Delete
+R1/C2 End
+R2/C2 PageDown
+R0/C3 Left
+R1/C3 Down
+R2/C3 Right
+R3/C3 Up
+
+USB HID：标准 8 字节 Boot Keyboard 报告。
+MCP23008 地址：启动时自动扫描 0x20~0x27。
+按键扫描：2ms；积分消抖 4 次。
+
+RGB：按当前原理图的 DIN/DOUT 串联灯设计，PB6 使用 TIM4_CH1 + DMA1_Channel1
+生成 800kHz 波形，并处理 Q2 反相。默认暗蓝，按下对应按键时变亮白。
+注意：这要求安装的是“带 DIN/DOUT 内置控制芯片”的可寻址 6028；
+普通四脚共阳/共阴 RGB 6028 不支持这种协议。
+
+编译：
+  ./build_flash.sh build
+
+编译并烧录：
+  ./build_flash.sh
