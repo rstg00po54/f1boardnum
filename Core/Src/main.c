@@ -578,8 +578,11 @@ static void LED6028_SetAll(uint8_t red, uint8_t green, uint8_t blue)
 
 static __attribute__((always_inline)) inline void LED6028_SendBit(uint8_t one)
 {
-  uint32_t start = DWT->CYCCNT;
-  uint32_t high_cycles = (one != 0U) ? LED6028_T1H_CYCLES : LED6028_T0H_CYCLES;
+  uint32_t start;
+  uint32_t high_cycles;
+
+  high_cycles = (one != 0U) ? LED6028_T1H_CYCLES : LED6028_T0H_CYCLES;
+  start = DWT->CYCCNT;
   LED6028_GPIO_PORT->BRR = LED6028_PIN;
   while ((uint32_t)(DWT->CYCCNT - start) < high_cycles) {}
   LED6028_GPIO_PORT->BSRR = LED6028_PIN;
@@ -658,7 +661,7 @@ int main(void)
 
   printf("\r\n========================================\r\n");
   printf("MultiPad direction board start\r\n");
-  printf("MCU              : STM32F103C8T6\r\n");
+  printf("MCU              : STM32F103C8T6\r\n", (unsigned long)SystemCoreClock);
   printf("SystemCoreClock  : %lu Hz\r\n", (unsigned long)SystemCoreClock);
   printf("USB              : PA11 D- / PA12 D+\r\n");
   printf("MCP23008 I2C     : PB8 SCL / PB9 SDA, scan 0x20..0x27\r\n");
