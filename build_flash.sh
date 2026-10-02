@@ -127,7 +127,7 @@ flash()
         -f interface/cmsis-dap.cfg \
         -c "transport select swd" \
         -f target/stm32f1x.cfg \
-        -c "adapter speed $SWD_SPEED" \
+        -c "adapter_khz $SWD_SPEED" \
         -c "program {$ELF_FILE} verify reset exit"
 
     echo
