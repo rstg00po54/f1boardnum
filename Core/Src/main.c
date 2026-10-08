@@ -24,7 +24,7 @@ UART_HandleTypeDef huart1;
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
 #define KEY_SCAN_PERIOD_MS             2U
-#define KEY_DEBOUNCE_COUNT             1U
+#define KEY_DEBOUNCE_COUNT             3U
 #define MCP23008_POLL_PERIOD_MS     1000U
 
 #define MCP23008_ADDR_FIRST          0x20U
@@ -108,6 +108,7 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 #define HID_KEY_BACKSLASH            0x31U
 #define HID_KEY_SEMICOLON            0x33U
 #define HID_KEY_APOSTROPHE           0x34U
+#define HID_KEY_GRAVE                0x35U
 #define HID_KEY_COMMA                0x36U
 #define HID_KEY_DOT                  0x37U
 #define HID_KEY_SLASH                0x38U
@@ -159,7 +160,7 @@ static const KeyMapEntry g_keymap[] =
   {0x20U, 3U, 3U, HID_KEY_UP,           0U, 9U},
 
   /* 0x23: 键盘87_左1. */
-  {0x23U, 0U, 0U, HID_KEY_4,            0U, LED_NONE},
+  {0x23U, 0U, 0U, HID_KEY_GRAVE,        0U, LED_NONE},
   {0x23U, 1U, 0U, HID_KEY_1,            0U, LED_NONE},
   {0x23U, 2U, 0U, HID_KEY_2,            0U, LED_NONE},
   {0x23U, 3U, 0U, HID_KEY_3,            0U, LED_NONE},
@@ -542,7 +543,7 @@ static const char *Keyboard_KeyName(uint8_t hid, uint8_t mod)
     case HID_KEY_ENTER: return "ENTER"; case HID_KEY_BACKSPACE: return "BACKSPACE"; case HID_KEY_TAB: return "TAB";
     case HID_KEY_SPACE: return "SPACE"; case HID_KEY_MINUS: return "-"; case HID_KEY_EQUAL: return "=";
     case HID_KEY_LEFT_BRACKET: return "["; case HID_KEY_RIGHT_BRACKET: return "]"; case HID_KEY_BACKSLASH: return "\\";
-    case HID_KEY_SEMICOLON: return ";"; case HID_KEY_APOSTROPHE: return "'"; case HID_KEY_COMMA: return ",";
+    case HID_KEY_SEMICOLON: return ";"; case HID_KEY_APOSTROPHE: return "'"; case HID_KEY_GRAVE: return "`"; case HID_KEY_COMMA: return ",";
     case HID_KEY_DOT: return "."; case HID_KEY_SLASH: return "/"; case HID_KEY_CAPS_LOCK: return "CAPS";
     case HID_KEY_INSERT: return "INS"; case HID_KEY_HOME: return "HOME"; case HID_KEY_PAGE_UP: return "PGUP";
     case HID_KEY_DELETE: return "DEL"; case HID_KEY_END: return "END"; case HID_KEY_PAGE_DOWN: return "PGDN";
