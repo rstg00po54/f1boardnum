@@ -24,7 +24,7 @@ UART_HandleTypeDef huart1;
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
 #define KEY_SCAN_PERIOD_MS             2U
-#define KEY_DEBOUNCE_COUNT             4U
+#define KEY_DEBOUNCE_COUNT             1U
 #define MCP23008_POLL_PERIOD_MS     1000U
 
 #define MCP23008_ADDR_FIRST          0x20U
@@ -516,6 +516,41 @@ static void MCP23008_PollAll(void)
   printf("\r\n");
 }
 
+static const char *Keyboard_KeyName(uint8_t hid, uint8_t mod)
+{
+  if (mod == HID_MOD_LCTRL) return "LCTRL";
+  if (mod == HID_MOD_LSHIFT) return "LSHIFT";
+  if (mod == HID_MOD_LALT) return "LALT";
+  if (mod == HID_MOD_LGUI) return "LWIN";
+  if (mod == HID_MOD_RCTRL) return "RCTRL";
+  if (mod == HID_MOD_RSHIFT) return "RSHIFT";
+  if (mod == HID_MOD_RALT) return "RALT";
+  if (mod == HID_MOD_RGUI) return "RWIN";
+
+  switch (hid)
+  {
+    case HID_KEY_A: return "A"; case HID_KEY_B: return "B"; case HID_KEY_C: return "C"; case HID_KEY_D: return "D";
+    case HID_KEY_E: return "E"; case HID_KEY_F: return "F"; case HID_KEY_G: return "G"; case HID_KEY_H: return "H";
+    case HID_KEY_I: return "I"; case HID_KEY_J: return "J"; case HID_KEY_K: return "K"; case HID_KEY_L: return "L";
+    case HID_KEY_M: return "M"; case HID_KEY_N: return "N"; case HID_KEY_O: return "O"; case HID_KEY_P: return "P";
+    case HID_KEY_Q: return "Q"; case HID_KEY_R: return "R"; case HID_KEY_S: return "S"; case HID_KEY_T: return "T";
+    case HID_KEY_U: return "U"; case HID_KEY_V: return "V"; case HID_KEY_W: return "W"; case HID_KEY_X: return "X";
+    case HID_KEY_Y: return "Y"; case HID_KEY_Z: return "Z";
+    case HID_KEY_1: return "1"; case HID_KEY_2: return "2"; case HID_KEY_3: return "3"; case HID_KEY_4: return "4";
+    case HID_KEY_5: return "5"; case HID_KEY_6: return "6"; case HID_KEY_7: return "7"; case HID_KEY_8: return "8";
+    case HID_KEY_9: return "9"; case HID_KEY_0: return "0";
+    case HID_KEY_ENTER: return "ENTER"; case HID_KEY_BACKSPACE: return "BACKSPACE"; case HID_KEY_TAB: return "TAB";
+    case HID_KEY_SPACE: return "SPACE"; case HID_KEY_MINUS: return "-"; case HID_KEY_EQUAL: return "=";
+    case HID_KEY_LEFT_BRACKET: return "["; case HID_KEY_RIGHT_BRACKET: return "]"; case HID_KEY_BACKSLASH: return "\\";
+    case HID_KEY_SEMICOLON: return ";"; case HID_KEY_APOSTROPHE: return "'"; case HID_KEY_COMMA: return ",";
+    case HID_KEY_DOT: return "."; case HID_KEY_SLASH: return "/"; case HID_KEY_CAPS_LOCK: return "CAPS";
+    case HID_KEY_INSERT: return "INS"; case HID_KEY_HOME: return "HOME"; case HID_KEY_PAGE_UP: return "PGUP";
+    case HID_KEY_DELETE: return "DEL"; case HID_KEY_END: return "END"; case HID_KEY_PAGE_DOWN: return "PGDN";
+    case HID_KEY_RIGHT: return "RIGHT"; case HID_KEY_LEFT: return "LEFT"; case HID_KEY_DOWN: return "DOWN"; case HID_KEY_UP: return "UP";
+    default: return "UNMAPPED";
+  }
+}
+
 static void Keyboard_Init(void)
 {
   memset(g_debounce, 0, sizeof(g_debounce));
@@ -598,7 +633,8 @@ static void Keyboard_Scan(void)
     {
       g_key_state[i] = 1U;
       state_changed = 1U;
-      printf("KEY DOWN: addr=0x%02X R%u C%u hid=0x%02X mod=0x%02X\r\n",
+      printf("KEY DOWN: key=%s addr=0x%02X R%u C%u hid=0x%02X mod=0x%02X\r\n",
+             Keyboard_KeyName(g_keymap[i].hid, g_keymap[i].mod),
              (unsigned int)g_keymap[i].addr, (unsigned int)g_keymap[i].row,
              (unsigned int)g_keymap[i].col, (unsigned int)g_keymap[i].hid,
              (unsigned int)g_keymap[i].mod);
@@ -607,7 +643,8 @@ static void Keyboard_Scan(void)
     {
       g_key_state[i] = 0U;
       state_changed = 1U;
-      printf("KEY UP  : addr=0x%02X R%u C%u hid=0x%02X mod=0x%02X\r\n",
+      printf("KEY UP  : key=%s addr=0x%02X R%u C%u hid=0x%02X mod=0x%02X\r\n",
+             Keyboard_KeyName(g_keymap[i].hid, g_keymap[i].mod),
              (unsigned int)g_keymap[i].addr, (unsigned int)g_keymap[i].row,
              (unsigned int)g_keymap[i].col, (unsigned int)g_keymap[i].hid,
              (unsigned int)g_keymap[i].mod);
