@@ -24,7 +24,7 @@ UART_HandleTypeDef huart1;
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
 #define KEY_SCAN_PERIOD_MS             2U
-#define KEY_DEBOUNCE_COUNT             3U
+#define KEY_DEBOUNCE_COUNT             1U
 #define MCP23008_POLL_PERIOD_MS     1000U
 
 #define MCP23008_ADDR_FIRST          0x20U
