@@ -55,6 +55,7 @@ void HidWorker::run()
     timer.start();
     qint64 lastScan = -2000;
     qint64 lastPoll = 0;
+    qint64 lastMetricsPoll = -1100;
 
     while (!m_stopping.load()) {
         const qint64 now = timer.elapsed();
@@ -88,6 +89,7 @@ void HidWorker::run()
             if (control) {
                 wasConnected = true;
                 lastPoll = now - 4000;
+                lastMetricsPoll = now - 1100;
                 emit deviceStatus(kind, true, true);
                 emit diagnostic(kind, niceName(kind) + QStringLiteral(" HID 控制接口已打开"));
             } else if (found && now < 4000) {
@@ -106,6 +108,13 @@ void HidWorker::run()
             QByteArray poll(32, '\0');
             poll[0] = kind == 0 ? char(0x01) : char(0x08);
             if (kind == 1) { poll[1] = 3; poll[2] = 1; }
+            submit(poll);
+        }
+
+        if (kind == 0 && now - lastMetricsPoll >= 1100) {
+            lastMetricsPoll = now;
+            QByteArray poll(32, '\0');
+            poll[0] = char(0x09); // GET_METRICS: older firmware returns unsupported ACK.
             submit(poll);
         }
 
@@ -184,6 +193,7 @@ DeviceBackend::DeviceBackend(QObject *parent) : QObject(parent)
         m_workers[i] = worker;
         connect(worker, &HidWorker::deviceStatus, this,
                 [this](int kind, bool detected, bool active) {
+            if (kind == 0 && !active) m_metrics = Metrics{};
             m_detected[kind] = detected;
             m_connected[kind] = active;
             if (active) {
@@ -373,6 +383,24 @@ void DeviceBackend::received(int kind, const QByteArray &p)
             if (count > 0) log(QString::fromUtf8(p.constData() + 2, count));
             return;
         }
+        if (op == 0x83 && p.size() >= 16 && byteAt(p, 1) == 1) {
+            // All counts are measured on the STM32 over a one-second window.
+            // USB polling is the descriptor's maximum configured interval,
+            // not the actual observed key-change reporting frequency.
+            const auto word = [&p](int i) -> int {
+                return byteAt(p, i) | (byteAt(p, i + 1) << 8);
+            };
+            m_metrics.available = byteAt(p, 15) == 1;
+            m_metrics.usbPollHz = byteAt(p, 2) != 0 ? 1000 / byteAt(p, 2) : 0;
+            m_metrics.scanHz = word(3);
+            m_metrics.scanAvgUs = word(5);
+            m_metrics.scanMaxUs = word(7);
+            m_metrics.hidReportHz = word(9);
+            m_metrics.cpuActivePermille = word(11);
+            m_metrics.windowMs = word(13);
+            emit stateChanged();
+            return;
+        }
         if (op == 0x81 && p.size() >= 20) {
             st.mode = byteAt(p, 2);
             st.brightness = byteAt(p, 3);
@@ -391,6 +419,8 @@ void DeviceBackend::received(int kind, const QByteArray &p)
                 log(byteAt(p, 2) == 1 ? QStringLiteral("MultiPad：Flash 保存成功")
                                       : QStringLiteral("MultiPad：Flash 保存失败"));
                 send(0, packet({0x01}));
+            } else if (byteAt(p, 1) == 0x09) {
+                // A legacy firmware doesn't support telemetry; don't spam.
             } else if (byteAt(p, 2) != 1) {
                 log(QStringLiteral("MultiPad：命令 %1 被拒绝").arg(byteAt(p, 1)));
             }
