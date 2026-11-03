@@ -434,6 +434,7 @@ static void Keyboard_BuildReport(void);
 static void Keyboard_USBService(void);
 static void WebHID_Service(void);
 static void WebHID_QueueLog(const char *text, int len);
+static void USB_ForceReenumeration(void);
 static void Keyboard_UpdateLEDs(uint32_t now);
 static void LED6028_Init(void);
 static void LED6028_SetPixel(uint8_t index, uint8_t red, uint8_t green, uint8_t blue);
@@ -1237,8 +1238,10 @@ static void Keyboard_UpdateLEDs(uint32_t now)
 
   if ((g_rgb_mode == 3U) || (g_rgb_mode == 4U)) /* Spatial rainbow */
   {
-    /* Advance phase at user-selected speed, independent of wiring order.
-     * Division happens before truncation to avoid 32-bit now * speed overflow.
+    /* A pattern hue = position + phase travels toward smaller coordinates.
+     * Use position - phase so mode 3 travels LEFT->RIGHT and mode 4
+     * travels TOP->BOTTOM, regardless of the physical PCB wiring order.
+     * Division before multiplication avoids 32-bit now*speed overflow.
      */
     const uint8_t phase = (uint8_t)((now / 80U) * g_rgb_speed);
     for (uint8_t i = 0U; i < LED6028_COUNT; i++)
@@ -1251,8 +1254,8 @@ static void Keyboard_UpdateLEDs(uint32_t now)
          * height. No discontinuity at the four PCB boundaries.
          */
         hue = (g_rgb_mode == 3U)
-          ? (uint8_t)(((uint16_t)pos->x * 256U) / LED6028_SPATIAL_X_PERIOD + phase)
-          : (uint8_t)(((uint16_t)pos->y * 256U) / LED6028_SPATIAL_Y_PERIOD + phase);
+          ? (uint8_t)(((uint16_t)pos->x * 256U) / LED6028_SPATIAL_X_PERIOD - phase)
+          : (uint8_t)(((uint16_t)pos->y * 256U) / LED6028_SPATIAL_Y_PERIOD - phase);
       }
       else
       {
@@ -1310,6 +1313,12 @@ int main(void)
   SystemClock_Config();
   MX_GPIO_Init();
   MX_USART1_UART_Init();
+  /* R14 is a fixed 1.5k pull-up from PA12 (HID_DP) to 3.3V. A firmware
+   * reboot / ST-Link flash does not remove that pull-up, so Windows may
+   * retain the previous USB connection. Generate a real D+ low interval
+   * before starting the USB peripheral, without resetting other GPIOs.
+   */
+  USB_ForceReenumeration();
   MX_USB_DEVICE_Init();
 
   CycleCounter_Init();
@@ -1425,6 +1434,37 @@ static void MX_USART1_UART_Init(void)
   huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
   if (HAL_UART_Init(&huart1) != HAL_OK) Error_Handler();
+}
+
+/* STM32F103 USB Full Speed: PA12 = D+.
+ * Direction-board schematic: R14 (1.5k) connects HID_DP to VCC3V3.
+ * Since the pull-up is always powered, an MCU reset / SWD programming
+ * sequence need not produce a physical USB detach.  Override the pull-up
+ * with PA12 push-pull LOW for 150ms (~2.2mA through R14), release it,
+ * and immediately let STM32Cube take ownership of USB pins.
+ *
+ * Only call before MX_USB_DEVICE_Init(); NEVER while the USB peripheral
+ * is active.  This does not depend on browser state or RGB mode.
+ */
+static void USB_ForceReenumeration(void)
+{
+  GPIO_InitTypeDef gpio = {0};
+
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_12, GPIO_PIN_RESET);
+  gpio.Pin = GPIO_PIN_12;
+  gpio.Mode = GPIO_MODE_OUTPUT_PP;
+  gpio.Pull = GPIO_NOPULL;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &gpio);
+
+  /* Let the host/hub observe a stable USB detach, even on SWD reset. */
+  HAL_Delay(150U);
+
+  /* Return PA12 to its reset/default configuration. The hardware 1.5k
+   * pull-up restores D+ HIGH; MX_USB_DEVICE_Init() starts the USB IP.
+   */
+  HAL_GPIO_DeInit(GPIOA, GPIO_PIN_12);
 }
 
 static void MX_GPIO_Init(void)
