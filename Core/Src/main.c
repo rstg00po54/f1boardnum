@@ -25,16 +25,16 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 
 #define KEY_SCAN_PERIOD_MS             2U
 #define KEY_DEBOUNCE_COUNT             1U
-/* Hold physical Fn (0x21 R2/C3) + Space (0x24 R3/C3)
+/* Hold physical Fn (0x21 R2/C3) + Backspace (0x21 R3/C0)
  * for three seconds to reboot. The combo cannot be triggered by USB.
  */
 #define KEY_REBOOT_HOLD_MS           3000U
 #define KEY_FN_MCP_ADDR              0x21U
 #define KEY_FN_ROW                   2U
 #define KEY_FN_COL                   3U
-#define KEY_SPACE_MCP_ADDR           0x24U
-#define KEY_SPACE_ROW                3U
-#define KEY_SPACE_COL                3U
+#define KEY_BACKSPACE_MCP_ADDR       0x21U
+#define KEY_BACKSPACE_ROW            3U
+#define KEY_BACKSPACE_COL            0U
 #define MCP23008_POLL_PERIOD_MS     1000U
 
 #define MCP23008_ADDR_FIRST          0x20U
@@ -641,13 +641,13 @@ static void Keyboard_RebootShortcut(uint32_t now)
   static uint32_t hold_start = 0U;
 
   const uint8_t fn_down = Keyboard_KeyDown(KEY_FN_MCP_ADDR, KEY_FN_ROW, KEY_FN_COL);
-  const uint8_t space_down = Keyboard_KeyDown(KEY_SPACE_MCP_ADDR,
-                                              KEY_SPACE_ROW, KEY_SPACE_COL);
+  const uint8_t backspace_down = Keyboard_KeyDown(KEY_BACKSPACE_MCP_ADDR,
+                                                  KEY_BACKSPACE_ROW, KEY_BACKSPACE_COL);
 
   /* Do not repeatedly reboot if both keys remain held after a reset.
    * The shortcut is rearmed once either key has been released.
    */
-  if ((fn_down == 0U) || (space_down == 0U))
+  if ((fn_down == 0U) || (backspace_down == 0U))
   {
     armed = 1U;
     holding = 0U;
@@ -663,7 +663,7 @@ static void Keyboard_RebootShortcut(uint32_t now)
   }
   else if ((uint32_t)(now - hold_start) >= KEY_REBOOT_HOLD_MS)
   {
-    printf("[KEYBOARD] Fn+Space held 3s: software reboot\r\n");
+    printf("[KEYBOARD] Fn+Backspace held 3s: software reboot\r\n");
     HAL_Delay(25U);
     NVIC_SystemReset();
   }
@@ -678,11 +678,11 @@ static void Keyboard_BuildReport(void)
   for (uint8_t i = 0U; i < KEY_COUNT; i++)
   {
     if (g_key_state[i] == 0U) continue;
-    /* Fn+Space must not type a space while waiting for the reboot. */
+    /* Fn+Backspace must not delete text while waiting for the reboot. */
     if ((fn_down != 0U) &&
-        (g_keymap[i].addr == KEY_SPACE_MCP_ADDR) &&
-        (g_keymap[i].row == KEY_SPACE_ROW) &&
-        (g_keymap[i].col == KEY_SPACE_COL))
+        (g_keymap[i].addr == KEY_BACKSPACE_MCP_ADDR) &&
+        (g_keymap[i].row == KEY_BACKSPACE_ROW) &&
+        (g_keymap[i].col == KEY_BACKSPACE_COL))
       continue;
     g_hid_report[0] |= g_keymap[i].mod;
     if ((g_keymap[i].hid != 0U) && (report_index < sizeof(g_hid_report)))
