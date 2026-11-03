@@ -39,7 +39,7 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 
 #define MCP23008_ADDR_FIRST          0x20U
 #define MCP23008_ADDR_LAST           0x27U
-#define MCP23008_COUNT                  5U
+#define MCP23008_COUNT                  6U
 #define MCP23008_REG_IODIR           0x00U
 #define MCP23008_REG_IPOL            0x01U
 #define MCP23008_REG_GPINTEN         0x02U
@@ -153,7 +153,7 @@ typedef struct
   uint8_t led;
 } KeyMapEntry;
 
-static const uint8_t g_mcp_addrs[MCP23008_COUNT] = {0x20U, 0x21U, 0x22U, 0x23U, 0x24U};
+static const uint8_t g_mcp_addrs[MCP23008_COUNT] = {0x20U, 0x21U, 0x22U, 0x23U, 0x24U, 0x27U};
 
 /* 0x20: direction board. */
 static const KeyMapEntry g_keymap[] =
@@ -263,6 +263,7 @@ static uint8_t SoftI2C_Probe(uint8_t addr7);
 static void MCP23008_ScanBus(void);
 static uint8_t SoftI2C_WriteReg(uint8_t addr7, uint8_t reg, uint8_t value);
 static uint8_t SoftI2C_ReadReg(uint8_t addr7, uint8_t reg, uint8_t *value);
+static uint8_t MCP23008_CountReady(void);
 static uint8_t MCP23008_InitAll(void);
 static void MCP23008_PollAll(void);
 static void Keyboard_Init(void);
@@ -514,6 +515,20 @@ static uint8_t MCP23008_Config(uint8_t addr)
   return ((iodir == 0x0FU) && ((gppu & 0x0FU) == 0x0FU)) ? 1U : 0U;
 }
 
+/* Recalculate actual online devices, including failures during key scanning.
+ * Never use the last initialization result as live readiness status.
+ */
+static uint8_t MCP23008_CountReady(void)
+{
+  uint8_t count = 0U;
+  for (uint8_t i = 0U; i < MCP23008_COUNT; i++)
+  {
+    if (g_mcp_ready[i] != 0U) count++;
+  }
+  g_mcp_found_count = count;
+  return count;
+}
+
 static uint8_t MCP23008_InitAll(void)
 {
   uint8_t count = 0U;
@@ -543,10 +558,16 @@ static void MCP23008_PollAll(void)
     uint8_t gpio = 0U;
     uint8_t addr = g_mcp_addrs[i];
     if ((g_mcp_ready[i] != 0U) && (SoftI2C_ReadReg(addr, MCP23008_REG_GPIO, &gpio) != 0U))
+    {
       printf(" %02X=%02X", (unsigned int)addr, (unsigned int)gpio);
+    }
     else
+    {
+      g_mcp_ready[i] = 0U;
       printf(" %02X=ERR", (unsigned int)addr);
+    }
   }
+  (void)MCP23008_CountReady();
   printf("\r\n");
 }
 
@@ -706,8 +727,12 @@ static void Keyboard_Scan(void)
       }
     }
 
-    (void)SoftI2C_WriteReg(addr, MCP23008_REG_OLAT, MCP_COL_OUT_MASK);
+    if ((g_mcp_ready[dev] != 0U) &&
+        (SoftI2C_WriteReg(addr, MCP23008_REG_OLAT, MCP_COL_OUT_MASK) == 0U))
+      g_mcp_ready[dev] = 0U;
   }
+
+  (void)MCP23008_CountReady();
 
   for (uint8_t i = 0U; i < KEY_COUNT; i++)
   {
@@ -880,11 +905,11 @@ int main(void)
   MCP23008_PollAll();
 
   printf("\r\n========================================\r\n");
-  printf("MultiPad 5-board keyboard start\r\n");
+  printf("MultiPad 6-board keyboard start\r\n");
   printf("MCU              : STM32F103C8T6\r\n");
   printf("SystemCoreClock  : %lu Hz\r\n", (unsigned long)SystemCoreClock);
   printf("USB              : PA11 D- / PA12 D+\r\n");
-  printf("MCP23008         : 0x20 direction, 0x23 left1, 0x24 left2, 0x22 left3, 0x21 left4\r\n");
+  printf("MCP23008         : 0x20 direction, 0x23 left1, 0x24 left2, 0x22 left3, 0x21 left4, 0x27 extra\r\n");
   printf("MCP ready        : %u/%u\r\n", (unsigned int)g_mcp_found_count, (unsigned int)MCP23008_COUNT);
   printf("Keys             : %u mapped keys\r\n", (unsigned int)KEY_COUNT);
   printf("RGB              : PB6 GPIO bit-bang, %u LEDs\r\n", (unsigned int)LED6028_COUNT);
@@ -914,6 +939,11 @@ int main(void)
     if ((g_mcp_found_count < MCP23008_COUNT) && ((uint32_t)(now - last_mcp_retry_tick) >= 1000U))
     {
       last_mcp_retry_tick = now;
+      printf("[I2C] MCP online=%u/%u, recovering bus (PB8 SCL=%u, PB9 SDA=%u)\r\n",
+             (unsigned int)g_mcp_found_count, (unsigned int)MCP23008_COUNT,
+             (unsigned int)((GPIOB->IDR & SOFT_I2C_SCL_PIN) != 0U),
+             (unsigned int)((GPIOB->IDR & SOFT_I2C_SDA_PIN) != 0U));
+      SoftI2C_Init();
       (void)MCP23008_InitAll();
     }
 
