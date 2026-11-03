@@ -25,6 +25,7 @@ UART_HandleTypeDef huart1;
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
 #define KEY_SCAN_PERIOD_MS             2U
+#define METRICS_SAMPLE_PERIOD_MS      1000U
 #define KEY_DEBOUNCE_COUNT             1U
 /* Hold physical Fn (0x21 R2/C3) + Backspace (0x21 R3/C0)
  * for three seconds to reboot. The combo cannot be triggered by USB.
@@ -444,6 +445,26 @@ static uint8_t g_webhid_reply_pending = 0U;
 static uint8_t g_webhid_log_queue[WEBHID_LOG_QUEUE_SIZE][WEBHID_PACKET_SIZE];
 static uint8_t g_webhid_log_head = 0U;
 static uint8_t g_webhid_log_tail = 0U;
+
+/* DWT CYCCNT is already enabled for software I2C. WFI idle is excluded
+ * from the active time estimate (interrupts during WFI may be undercounted). */
+typedef struct
+{
+  uint16_t scan_hz;
+  uint16_t scan_avg_us;
+  uint16_t scan_max_us;
+  uint16_t hid_reports_hz;
+  uint16_t active_permille;
+  uint16_t window_ms;
+  uint8_t ready;
+} KeyboardMetrics;
+
+static KeyboardMetrics g_metrics;
+static uint32_t g_metrics_scan_count;
+static uint64_t g_metrics_scan_cycles;
+static uint32_t g_metrics_max_scan_cycles;
+static uint32_t g_metrics_report_count;
+static uint64_t g_metrics_busy_cycles;
 /* USER CODE END PV */
 
 void SystemClock_Config(void);
@@ -452,6 +473,8 @@ static void MX_USART1_UART_Init(void);
 
 /* USER CODE BEGIN PFP */
 static void CycleCounter_Init(void);
+static void Metrics_FinishWindow(uint32_t elapsed_ms);
+static void Metrics_PackReply(uint8_t reply[WEBHID_PACKET_SIZE]);
 static void DelayUs(uint32_t us);
 static void SoftI2C_Init(void);
 static uint8_t SoftI2C_Probe(uint8_t addr7);
@@ -663,6 +686,57 @@ static uint8_t RGB_StoreSave(void)
   return 1U;
 }
 
+static void Metrics_FinishWindow(uint32_t elapsed_ms)
+{
+  const uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+  const uint64_t expected_cycles = (uint64_t)SystemCoreClock * elapsed_ms / 1000U;
+  uint64_t permille = expected_cycles == 0U ? 0U :
+                       (g_metrics_busy_cycles * 1000U + expected_cycles / 2U) / expected_cycles;
+  if (permille > 1000U) permille = 1000U;
+
+  uint32_t rate = elapsed_ms ? (g_metrics_scan_count * 1000U) / elapsed_ms : 0U;
+  g_metrics.scan_hz = rate > 65535U ? 65535U : (uint16_t)rate;
+  uint32_t report_rate = elapsed_ms ? (g_metrics_report_count * 1000U) / elapsed_ms : 0U;
+  g_metrics.hid_reports_hz = report_rate > 65535U ? 65535U : (uint16_t)report_rate;
+  uint64_t avg_us = (g_metrics_scan_count != 0U && cycles_per_us != 0U) ?
+                     g_metrics_scan_cycles / (g_metrics_scan_count * (uint64_t)cycles_per_us) : 0U;
+  g_metrics.scan_avg_us = avg_us > 65535U ? 65535U : (uint16_t)avg_us;
+  uint32_t max_us = cycles_per_us ? g_metrics_max_scan_cycles / cycles_per_us : 0U;
+  g_metrics.scan_max_us = max_us > 65535U ? 65535U : (uint16_t)max_us;
+  g_metrics.active_permille = (uint16_t)permille;
+  g_metrics.window_ms = elapsed_ms > 65535U ? 65535U : (uint16_t)elapsed_ms;
+  g_metrics.ready = 1U;
+
+  g_metrics_scan_count = 0U;
+  g_metrics_scan_cycles = 0U;
+  g_metrics_max_scan_cycles = 0U;
+  g_metrics_report_count = 0U;
+  g_metrics_busy_cycles = 0U;
+}
+
+/* Protocol extension: GET_METRICS 0x09 replies 0x83 with 32 bytes.
+ * [1]=format v1; [2]=USB FS bInterval (ms);
+ * little-endian 16-bit [3]=scanHz, [5]=avgScanUs, [7]=maxScanUs,
+ * [9]=HID reports submitted/s, [11]=active CPU permille,
+ * [13]=sample window ms; [15]=valid snapshot.
+ * Reports/s != host polling Hz; endpoints poll even without key events. */
+static void Metrics_PackReply(uint8_t reply[WEBHID_PACKET_SIZE])
+{
+  reply[0] = 0x83U;
+  reply[1] = 1U;
+  reply[2] = HID_FS_BINTERVAL;
+  const uint16_t values[6] = {
+    g_metrics.scan_hz, g_metrics.scan_avg_us, g_metrics.scan_max_us,
+    g_metrics.hid_reports_hz, g_metrics.active_permille, g_metrics.window_ms
+  };
+  for (uint8_t i = 0U; i < 6U; ++i)
+  {
+    reply[3U + 2U * i] = (uint8_t)(values[i] & 0xFFU);
+    reply[4U + 2U * i] = (uint8_t)(values[i] >> 8U);
+  }
+  reply[15] = g_metrics.ready;
+}
+
 static void WebHID_Service(void)
 {
   uint8_t command[WEBHID_PACKET_SIZE];
@@ -749,6 +823,9 @@ static void WebHID_Service(void)
         break;
       case 0x08U: /* SAVE current RGB mode/color/brightness/speed to Flash */
         ok = RGB_StoreSave();
+        break;
+      case 0x09U: /* GET_METRICS: read-only snapshot */
+        Metrics_PackReply(g_webhid_reply);
         break;
       default:
         ok = 0U;
