@@ -19,7 +19,7 @@ A shared I2C bus across six PCBs requires **external pull-up resistors to 3.3V**
 ## How to test
 
 1. Save a working copy of your old stable `.bin` (for recovery). Have ST-Link / bootloader flashing recovery available.
-2. Download `f1board-keyflux-telemetry-firmware` from this branch's passing GitHub Actions `KeyFlux STM32 Telemetry Firmware` run; use `f1board.bin`.
+2. Download `f1board-hardware-i2c1-400khz-firmware` from this branch's passing GitHub Actions `KeyFlux STM32 Hardware I2C1 400kHz` run; use `f1board.bin`.
 3. Flash with the **same verified flashing workflow and target address** used for your prior stable image.
 4. After reboot, open KeyFlux with MultiPad selected; verify 6/6 MCP online, press/release many keys (including simultaneous keys), inspect actual scan Hz, average/max scan ms, CPU active % and dropped/offline devices. Check RGB, USB reconnection.
 5. Compare actual metrics with the previous ~29.61ms/scan image. A successful compile **does not prove electrical timing or input correctness** on hardware.
