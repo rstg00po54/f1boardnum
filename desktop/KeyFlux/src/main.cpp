@@ -3,7 +3,7 @@
 #include <QQmlContext>
 #include <QIcon>
 #include "DeviceBackend.h"
-#include <hidapi/hidapi.h>
+#include <hidapi.h>
 
 int main(int argc, char *argv[])
 {
