@@ -610,24 +610,22 @@ static uint8_t  USBD_HID_Setup(USBD_HandleTypeDef *pdev,
   * @param  buff: pointer to report
   * @retval status
   */
-uint8_t USBD_HID_SendReport(USBD_HandleTypeDef  *pdev,
+uint8_t USBD_HID_SendReport(USBD_HandleTypeDef *pdev,
                             uint8_t *report,
                             uint16_t len)
 {
-  USBD_HID_HandleTypeDef     *hhid = (USBD_HID_HandleTypeDef *)pdev->pClassData;
+  if (pdev->dev_state != USBD_STATE_CONFIGURED || pdev->pClassData == NULL)
+    return USBD_FAIL;
 
-  if (pdev->dev_state == USBD_STATE_CONFIGURED)
-  {
-    if (hhid->state == HID_IDLE)
-    {
-      hhid->state = HID_BUSY;
-      USBD_LL_Transmit(pdev,
-                       HID_EPIN_ADDR,
-                       report,
-                       len);
-    }
-  }
-  return USBD_OK;
+  USBD_HID_HandleTypeDef *hhid = (USBD_HID_HandleTypeDef *)pdev->pClassData;
+  if (hhid->state != HID_IDLE)
+    return USBD_BUSY; /* Keep report pending if the IN endpoint is busy. */
+
+  hhid->state = HID_BUSY;
+  const uint8_t result = USBD_LL_Transmit(pdev, HID_EPIN_ADDR, report, len);
+  if (result != USBD_OK)
+    hhid->state = HID_IDLE;
+  return result;
 }
 
 /**
