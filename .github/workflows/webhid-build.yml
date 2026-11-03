@@ -10,6 +10,19 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Validate browser WebHID JavaScript
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, subprocess
+          html = Path("web/index.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script(?:\\s[^>]*)?>(.*?)</script>", html, re.S)
+          assert len(scripts) == 1, "Expected one inline console script"
+          js = Path("/tmp/multipad_webhid_check.js")
+          js.write_text(scripts[0], encoding="utf-8")
+          subprocess.run(["node", "--check", str(js)], check=True)
+          print("Browser WebHID script syntax OK")
+          PY
       - name: Install ARM toolchain
         run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi ninja-build cmake
       - name: Configure
