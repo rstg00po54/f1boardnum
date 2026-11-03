@@ -250,6 +250,7 @@ static void CycleCounter_Init(void);
 static void DelayUs(uint32_t us);
 static void SoftI2C_Init(void);
 static uint8_t SoftI2C_Probe(uint8_t addr7);
+static void MCP23008_ScanBus(void);
 static uint8_t SoftI2C_WriteReg(uint8_t addr7, uint8_t reg, uint8_t value);
 static uint8_t SoftI2C_ReadReg(uint8_t addr7, uint8_t reg, uint8_t *value);
 static uint8_t MCP23008_InitAll(void);
@@ -432,6 +433,26 @@ static uint8_t SoftI2C_Probe(uint8_t addr7)
   ok = SoftI2C_WriteByte((uint8_t)(addr7 << 1U));
   SoftI2C_Stop();
   return ok;
+}
+
+/* Diagnostic only: probe every valid MCP23008 7-bit address.
+ * This does not change the configured devices or key mapping.
+ */
+static void MCP23008_ScanBus(void)
+{
+  uint8_t found = 0U;
+
+  printf("\r\n=== I2C address scan (0x20-0x27) ===\r\n");
+  for (uint8_t addr = MCP23008_ADDR_FIRST; addr <= MCP23008_ADDR_LAST; addr++)
+  {
+    uint8_t ack = SoftI2C_Probe(addr);
+    if (ack != 0U) found++;
+    printf("I2C 0x%02X : %s\r\n", (unsigned int)addr,
+           (ack != 0U) ? "FOUND" : "MISS");
+  }
+  printf("I2C scan: %u responding address(es); firmware configured: %u\r\n",
+         (unsigned int)found, (unsigned int)MCP23008_COUNT);
+  printf("=======================================\r\n");
 }
 
 static uint8_t SoftI2C_WriteReg(uint8_t addr7, uint8_t reg, uint8_t value)
@@ -784,6 +805,8 @@ int main(void)
   LED6028_Init();
   HAL_Delay(100U);
 
+  /* Enumerate all possible MCP23008 addresses before configuring the boards. */
+  MCP23008_ScanBus();
   (void)MCP23008_InitAll();
   MCP23008_PollAll();
 
