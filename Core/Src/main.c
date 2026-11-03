@@ -294,6 +294,21 @@ static uint8_t g_scan_raw_rbits[MCP23008_COUNT][4];
 /* Previous raw row bits for every column, including currently unmapped keys. */
 static uint8_t g_matrix_prev_rbits[MCP23008_COUNT][4];
 static uint8_t g_led6028[LED6028_COUNT][3];
+
+/* WebHID RGB controller. Mode: off=0, breathe=1, solid=2, rainbow=3. */
+#define WEBHID_LOG_QUEUE_SIZE        16U
+static uint8_t g_rgb_mode = 1U;
+static uint8_t g_rgb_red = 128U;
+static uint8_t g_rgb_green = 32U;
+static uint8_t g_rgb_blue = 50U;
+static uint8_t g_rgb_brightness = 180U;
+static uint8_t g_rgb_speed = 5U;
+static uint8_t g_webhid_log_on = 0U;
+static uint8_t g_webhid_reply[WEBHID_PACKET_SIZE];
+static uint8_t g_webhid_reply_pending = 0U;
+static uint8_t g_webhid_log_queue[WEBHID_LOG_QUEUE_SIZE][WEBHID_PACKET_SIZE];
+static uint8_t g_webhid_log_head = 0U;
+static uint8_t g_webhid_log_tail = 0U;
 /* USER CODE END PV */
 
 void SystemClock_Config(void);
@@ -317,7 +332,9 @@ static uint8_t Keyboard_KeyDown(uint8_t addr, uint8_t row, uint8_t col);
 static void Keyboard_RebootShortcut(uint32_t now);
 static void Keyboard_BuildReport(void);
 static void Keyboard_USBService(void);
-static void Keyboard_UpdateLEDs(uint8_t breath_level);
+static void WebHID_Service(void);
+static void WebHID_QueueLog(const char *text, int len);
+static void Keyboard_UpdateLEDs(uint32_t now);
 static void LED6028_Init(void);
 static void LED6028_SetPixel(uint8_t index, uint8_t red, uint8_t green, uint8_t blue);
 static void LED6028_SetAll(uint8_t red, uint8_t green, uint8_t blue);
@@ -326,11 +343,118 @@ static void LED6028_BreathService(uint32_t now);
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
+/* Log packets are queued in the main loop, not transmitted during UART
+ * printf. They are dropped if the browser cannot keep up.
+ */
+static void WebHID_QueueLog(const char *message, int len)
+{
+  if ((g_webhid_log_on == 0U) || (message == NULL) || (len <= 0)) return;
+
+  int offset = 0;
+  while (offset < len)
+  {
+    uint8_t next = (uint8_t)((g_webhid_log_head + 1U) % WEBHID_LOG_QUEUE_SIZE);
+    if (next == g_webhid_log_tail) return; /* Queue full, do not block typing. */
+
+    uint8_t chunk = (uint8_t)(((len - offset) > 30) ? 30 : (len - offset));
+    uint8_t *packet = g_webhid_log_queue[g_webhid_log_head];
+    memset(packet, 0, WEBHID_PACKET_SIZE);
+    packet[0] = 0x80U; /* Text log */
+    packet[1] = chunk;
+    memcpy(packet + 2, message + offset, chunk);
+    g_webhid_log_head = next;
+    offset += chunk;
+  }
+}
+
+/* WebHID application-level protocol, always 32 bytes:
+ * PC->keyboard: 01 status, 02 mode, 03 RGB, 04 brightness,
+ *               05 speed, 06 log on/off.
+ * Keyboard->PC: 81 state, 82 command ACK, 80 text log.
+ */
+static void WebHID_Service(void)
+{
+  uint8_t command[WEBHID_PACKET_SIZE];
+
+  if ((g_webhid_reply_pending == 0U) &&
+      (USBD_HID_WebhidRead(&hUsbDeviceFS, command) != 0U))
+  {
+    uint8_t ok = 1U;
+    memset(g_webhid_reply, 0, WEBHID_PACKET_SIZE);
+    g_webhid_reply[0] = 0x82U; /* ACK */
+    g_webhid_reply[1] = command[0];
+
+    switch (command[0])
+    {
+      case 0x01U: /* GET_STATE */
+        g_webhid_reply[0] = 0x81U;
+        g_webhid_reply[1] = 1U; /* Protocol version */
+        g_webhid_reply[2] = g_rgb_mode;
+        g_webhid_reply[3] = g_rgb_brightness;
+        g_webhid_reply[4] = g_rgb_red;
+        g_webhid_reply[5] = g_rgb_green;
+        g_webhid_reply[6] = g_rgb_blue;
+        g_webhid_reply[7] = g_rgb_speed;
+        g_webhid_reply[8] = g_webhid_log_on;
+        g_webhid_reply[9] = g_mcp_found_count;
+        g_webhid_reply[10] = MCP23008_COUNT;
+        g_webhid_reply[11] = KEY_COUNT;
+        g_webhid_reply[12] = LED6028_COUNT;
+        break;
+      case 0x02U:
+        if (command[1] <= 3U) g_rgb_mode = command[1]; else ok = 0U;
+        break;
+      case 0x03U:
+        g_rgb_red = command[1];
+        g_rgb_green = command[2];
+        g_rgb_blue = command[3];
+        break;
+      case 0x04U:
+        g_rgb_brightness = command[1];
+        break;
+      case 0x05U:
+        if ((command[1] >= 1U) && (command[1] <= 10U))
+          g_rgb_speed = command[1];
+        else ok = 0U;
+        break;
+      case 0x06U:
+        if (command[1] <= 1U)
+        {
+          g_webhid_log_on = command[1];
+          if (g_webhid_log_on == 0U)
+            g_webhid_log_head = g_webhid_log_tail = 0U;
+        }
+        else ok = 0U;
+        break;
+      default:
+        ok = 0U;
+        break;
+    }
+
+    if (g_webhid_reply[0] == 0x82U)
+      g_webhid_reply[2] = ok;
+    g_webhid_reply_pending = 1U;
+  }
+
+  /* Replies outrank logs, so sliders remain responsive with verbose logging. */
+  if (g_webhid_reply_pending != 0U)
+  {
+    if (USBD_HID_WebhidSend(&hUsbDeviceFS, g_webhid_reply) != 0U)
+      g_webhid_reply_pending = 0U;
+  }
+  else if (g_webhid_log_head != g_webhid_log_tail)
+  {
+    if (USBD_HID_WebhidSend(&hUsbDeviceFS, g_webhid_log_queue[g_webhid_log_tail]) != 0U)
+      g_webhid_log_tail = (uint8_t)((g_webhid_log_tail + 1U) % WEBHID_LOG_QUEUE_SIZE);
+  }
+}
+
 int _write(int file, char *ptr, int len)
 {
   (void)file;
   if ((ptr == NULL) || (len <= 0)) return 0;
   if (HAL_UART_Transmit(&huart1, (uint8_t *)ptr, (uint16_t)len, HAL_MAX_DELAY) != HAL_OK) return -1;
+  WebHID_QueueLog(ptr, len);
   return len;
 }
 
@@ -1002,6 +1126,7 @@ int main(void)
     }
 
     Keyboard_USBService();
+    WebHID_Service();
     LED6028_BreathService(now);
 
     if ((uint32_t)(now - last_mcp_poll_tick) >= MCP23008_POLL_PERIOD_MS)
