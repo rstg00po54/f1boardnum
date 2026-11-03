@@ -300,7 +300,15 @@ async function disconnect() {
   device=null;connected(false);appendLog('\n[WEB] 已断开\n');
 }
 function updateIndexText() {
-  $('testIndexText').textContent = $('testIndex').value + ' / ' + (testLedCount - 1);
+  const n = Number($('testIndex').value);
+  const physical = visualMode();
+  const item = physical ? visualOrder[n] : null;
+  $('testIndexText').textContent = (n + 1) + ' / ' + (physical ? visualOrder.length : testLedCount);
+  $('testExpected').textContent = item ? item.key : (physical ? '未知键位' : '原始 LED #' + n);
+  $('testAddress').textContent = '数据链 #' + (item ? item.led : n) + (item ? ' · ' + boardName(item.led) + '（预期）' : '');
+  for (const key of document.querySelectorAll('.test-key')) {
+    key.classList.toggle('active', physical && Number(key.dataset.step) === n);
+  }
 }
 function stopAuto() {
   if (autoTimer !== null) clearInterval(autoTimer);
@@ -316,44 +324,59 @@ function leaveTestUi() {
 async function applyTest() {
   if (!diagnosticSupported || !device || !device.opened) return;
   const kind = Number($('testType').value);
-  const index = Number($('testIndex').value);
+  const index = ledForPosition();
   const rgb = diagnosticColors[$('testColor').value];
   await enqueue(0x07,[kind,index,...rgb]);
   testActive = true;
-  $('testStatus').textContent = kind === 1 ? ('正在定位 LED ' + index) : '全灯颜色测试中';
+  const expect = visualMode() ? ('，预期：' + $('testExpected').textContent) : '';
+  $('testStatus').textContent = kind === 1 ? ('LED #' + index + expect) : '全灯颜色测试中';
 }
 async function stopTest() {
   stopAuto();
-  if (device && device.opened && diagnosticSupported) {
-    await enqueue(0x07,[0,0,0,0,0]);
-  }
+  if (device && device.opened && diagnosticSupported) await enqueue(0x07,[0,0,0,0,0]);
   leaveTestUi();
 }
 function changeTestIndex(delta) {
-  const next = Math.min(testLedCount - 1, Math.max(0, Number($('testIndex').value) + delta));
+  const next = Math.min(Number($('testIndex').max), Math.max(0, Number($('testIndex').value) + delta));
   $('testIndex').value = String(next);
   updateIndexText();
   if (testActive) return applyTest();
   return Promise.resolve();
 }
-function updateBoardMarks() {
-  $('boardMarks').textContent = boardStarts.map((n,i) => '板 ' + (i+1) + ': ' + (n === null ? '?' : n)).join('　');
+function refreshMismatches() {
+  $('testMismatchList').textContent = mismatches.length ?
+    mismatches.map(m => '第 '+m.step+' 步：预期 '+m.expected+' (LED #'+m.led+')，实际 '+m.actual).join('\n') :
+    '暂无异常记录';
 }
-$('testStart').addEventListener('click',()=>applyTest().catch(()=>{}));
+$('testStart').addEventListener('click',()=>{
+  stopAuto();
+  $('testIndex').value = '0';
+  updateIndexText();
+  applyTest().catch(()=>{});
+});
 $('testStop').addEventListener('click',()=>stopTest().catch(()=>{}));
 $('testType').addEventListener('change',()=>{
-  if ($('testType').value !== '1') stopAuto();
+  stopAuto();
+  updateIndexRange();
+  updateDiagnosticControls();
+  if (testActive) applyTest().catch(()=>{});
+});
+$('testOrder').addEventListener('change',()=>{
+  stopAuto();
+  $('testIndex').value = '0';
+  updateIndexRange();
   updateDiagnosticControls();
   if (testActive) applyTest().catch(()=>{});
 });
 $('testColor').addEventListener('change',()=>{if(testActive) applyTest().catch(()=>{});});
 $('testIndex').addEventListener('input',updateIndexText);
-$('testIndex').addEventListener('change',()=>{if(testActive) applyTest().catch(()=>{});});
+$('testIndex').addEventListener('change',()=>{stopAuto();updateDiagnosticControls();if(testActive) applyTest().catch(()=>{});});
 $('testPrev').addEventListener('click',()=>changeTestIndex(-1).catch(()=>{}));
 $('testNext').addEventListener('click',()=>changeTestIndex(1).catch(()=>{}));
 $('testAuto').addEventListener('click',async()=>{
   if(autoTimer!==null){stopAuto();updateDiagnosticControls();return;}
   if ($('testType').value !== '1') $('testType').value = '1';
+  updateIndexRange();
   updateDiagnosticControls();
   try { if(!testActive) await applyTest(); }catch{ return; }
   autoTimer = setInterval(async()=>{
@@ -361,23 +384,45 @@ $('testAuto').addEventListener('click',async()=>{
     autoPending = true;
     try {
       const now = Number($('testIndex').value);
-      $('testIndex').value = String(now + 1 >= testLedCount ? 0 : now + 1);
+      $('testIndex').value = String(now + 1 > Number($('testIndex').max) ? 0 : now + 1);
       updateIndexText();
       await applyTest();
     } catch {stopAuto();} finally {autoPending = false;}
-  },500);
+  },Number($('testDelay').value));
   updateDiagnosticControls();
 });
-$('markStart').addEventListener('click',()=>{
-  boardStarts[Number($('testBoard').value)] = Number($('testIndex').value);
-  updateBoardMarks();
+$('testDelay').addEventListener('change',()=>{
+  if(autoTimer) {stopAuto();updateDiagnosticControls();}
 });
-$('copyMarks').addEventListener('click',async()=>{
-  const text = 'LED 物理板序记录（按 USB LED 编号）\n' +
-    boardStarts.map((n,i)=>'板 '+(i+1)+' 首颗: '+(n===null?'未知':n)).join('\n');
-  try {await navigator.clipboard.writeText(text);$('testStatus').textContent='已复制板号记录';}
-  catch { $('testStatus').textContent='复制失败，请手动记录：'+text.replaceAll('\n','；'); }
+$('markMismatch').addEventListener('click',()=>{
+  if(!visualMode()) {
+    $('testStatus').textContent = '请切换到「键盘排列」后记录异常';
+    return;
+  }
+  const n=Number($('testIndex').value);
+  const item=visualOrder[n];
+  const actual=$('testActual').value;
+  const lit=actual==='none'?'无灯亮':actual==='multiple'?'多颗灯亮':visualOrder[Number(actual.split(':')[1])]?.key || '未知';
+  if(lit===item.key) {
+    $('testStatus').textContent = '实际与预期一致，无须记录';
+    return;
+  }
+  mismatches.push({step:n+1,expected:item.key,led:item.led,actual:lit});
+  refreshMismatches();
+  $('testStatus').textContent = '已记录第 '+(n+1)+' 步不一致';
 });
+$('copyMismatches').addEventListener('click',async()=>{
+  const text = 'MultiPad 五块 PCB RGB 视觉顺序校验\n' +
+    '假设连接顺序：方向→右4→左3→左2→左1；只包括71颗主键盘LED。\n' +
+    (mismatches.length ? mismatches.map(m=>'第 '+m.step+' 步: 预期 '+m.expected+', LED #'+m.led+', 实际 '+m.actual).join('\n') : '暂无异常记录');
+  try {await navigator.clipboard.writeText(text);$('testStatus').textContent='已复制异常记录';}
+  catch { $('testStatus').textContent='复制失败，请手动复制下面的记录'; }
+});
+$('clearMismatches').addEventListener('click',()=>{
+  mismatches=[];
+  refreshMismatches();
+});
+setupKeyboard();
 $('connect').addEventListener('click',connect);
 $('disconnect').addEventListener('click',()=>disconnect().catch(e=>appendLog(e.message)));
 $('refresh').addEventListener('click',()=>enqueue(0x01).catch(()=>{}));
