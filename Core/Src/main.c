@@ -883,15 +883,268 @@ static void DelayUs(uint32_t us)
  * This preserves the existing six-board PCB wiring (PB8/PB9 shared bus).
  * The nine clocks can release a slave stuck waiting to finish a byte. */
 static uint8_t g_hw_i2c_online = 0U;
+static uint8_t g_i2c_software_fallback = 0U;
+
+/* Recovery path uses original GPIO input-pull-up I2C when the PCB cannot
+ * acknowledge any hardware I2C transaction. This is a compatibility
+ * fallback, not 400kHz operation; status is printed to USB/UART logs.
+ * Real Fast-mode hardware I2C still needs suitable EXTERNAL pull-ups. */
+static void GPIOB_SetCRHNibble(uint8_t pin, uint32_t nibble)
+{
+  uint32_t shift = ((uint32_t)pin - 8U) * 4U;
+  uint32_t crh = GPIOB->CRH;
+  crh &= ~(0xFU << shift);
+  crh |= ((nibble & 0xFU) << shift);
+  GPIOB->CRH = crh;
+}
+
+static void SoftI2C_SCL_Low(void)
+{
+  GPIOB->BRR = HW_I2C_SCL_PIN;
+  GPIOB_SetCRHNibble(8U, 0x6U);
+}
+
+static void SoftI2C_SCL_Release(void)
+{
+  GPIOB->BSRR = HW_I2C_SCL_PIN;
+  GPIOB_SetCRHNibble(8U, 0x8U);
+}
+
+static void SoftI2C_SDA_Low(void)
+{
+  GPIOB->BRR = HW_I2C_SDA_PIN;
+  GPIOB_SetCRHNibble(9U, 0x6U);
+}
+
+static void SoftI2C_SDA_Release(void)
+{
+  GPIOB->BSRR = HW_I2C_SDA_PIN;
+  GPIOB_SetCRHNibble(9U, 0x8U);
+}
+
+static uint8_t SoftI2C_SDA_Read(void)
+{
+  return ((GPIOB->IDR & HW_I2C_SDA_PIN) != 0U) ? 1U : 0U;
+}
+
+static void SoftI2C_WaitSCLHigh(void)
+{
+  uint32_t timeout = 2000U;
+  SoftI2C_SCL_Release();
+  while (((GPIOB->IDR & HW_I2C_SCL_PIN) == 0U) && (timeout > 0U)) timeout--;
+}
+
+static void SoftI2C_Delay(void)
+{
+  DelayUs(2U);
+}
+
+static void SoftI2C_Start(void)
+{
+  SoftI2C_SDA_Release();
+  SoftI2C_WaitSCLHigh();
+  SoftI2C_Delay();
+  SoftI2C_SDA_Low();
+  SoftI2C_Delay();
+  SoftI2C_SCL_Low();
+  SoftI2C_Delay();
+}
+
+static void SoftI2C_Stop(void)
+{
+  SoftI2C_SDA_Low();
+  SoftI2C_Delay();
+  SoftI2C_WaitSCLHigh();
+  SoftI2C_Delay();
+  SoftI2C_SDA_Release();
+  SoftI2C_Delay();
+}
+
+static uint8_t SoftI2C_WriteByte(uint8_t data)
+{
+  uint8_t ack;
+  for (uint8_t bit = 0U; bit < 8U; bit++)
+  {
+    if ((data & 0x80U) != 0U) SoftI2C_SDA_Release(); else SoftI2C_SDA_Low();
+    SoftI2C_Delay();
+    SoftI2C_WaitSCLHigh();
+    SoftI2C_Delay();
+    SoftI2C_SCL_Low();
+    SoftI2C_Delay();
+    data <<= 1U;
+  }
+
+  SoftI2C_SDA_Release();
+  SoftI2C_Delay();
+  SoftI2C_WaitSCLHigh();
+  SoftI2C_Delay();
+  ack = (SoftI2C_SDA_Read() == 0U) ? 1U : 0U;
+  SoftI2C_SCL_Low();
+  SoftI2C_Delay();
+  return ack;
+}
+
+static uint8_t SoftI2C_ReadByte(uint8_t ack)
+{
+  uint8_t data = 0U;
+  SoftI2C_SDA_Release();
+  for (uint8_t bit = 0U; bit < 8U; bit++)
+  {
+    data <<= 1U;
+    SoftI2C_Delay();
+    SoftI2C_WaitSCLHigh();
+    SoftI2C_Delay();
+    if (SoftI2C_SDA_Read() != 0U) data |= 1U;
+    SoftI2C_SCL_Low();
+    SoftI2C_Delay();
+  }
+
+  if (ack != 0U) SoftI2C_SDA_Low(); else SoftI2C_SDA_Release();
+  SoftI2C_Delay();
+  SoftI2C_WaitSCLHigh();
+  SoftI2C_Delay();
+  SoftI2C_SCL_Low();
+  SoftI2C_Delay();
+  SoftI2C_SDA_Release();
+  return data;
+}
+
+static void SoftI2C_Init(void)
+{
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  SoftI2C_SDA_Release();
+  SoftI2C_SCL_Release();
+  DelayUs(20U);
+  for (uint8_t i = 0U; i < 9U; i++)
+  {
+    SoftI2C_SCL_Low();
+    SoftI2C_Delay();
+    SoftI2C_WaitSCLHigh();
+    SoftI2C_Delay();
+  }
+  SoftI2C_Stop();
+}
+
+static uint8_t SoftI2C_Probe(uint8_t addr7)
+{
+  uint8_t ok;
+  SoftI2C_Start();
+  ok = SoftI2C_WriteByte((uint8_t)(addr7 << 1U));
+  SoftI2C_Stop();
+  return ok;
+}
+
+static uint8_t SoftI2C_WriteReg(uint8_t addr7, uint8_t reg, uint8_t value)
+{
+  uint8_t ok = 1U;
+  SoftI2C_Start();
+  ok &= SoftI2C_WriteByte((uint8_t)(addr7 << 1U));
+  ok &= SoftI2C_WriteByte(reg);
+  ok &= SoftI2C_WriteByte(value);
+  SoftI2C_Stop();
+  return ok;
+}
+
+static uint8_t SoftI2C_ReadReg(uint8_t addr7, uint8_t reg, uint8_t *value)
+{
+  uint8_t ok = 1U;
+  if (value == NULL) return 0U;
+
+  SoftI2C_Start();
+  ok &= SoftI2C_WriteByte((uint8_t)(addr7 << 1U));
+  ok &= SoftI2C_WriteByte(reg);
+  if (ok == 0U)
+  {
+    SoftI2C_Stop();
+    return 0U;
+  }
+
+  SoftI2C_Start();
+  ok &= SoftI2C_WriteByte((uint8_t)((addr7 << 1U) | 1U));
+  if (ok != 0U) *value = SoftI2C_ReadByte(0U);
+  SoftI2C_Stop();
+  return ok;
+}
+
+/* Fast matrix transaction: one address selection, a GPIO write,
+ * REPEATED START, GPIO read. IOCON.SEQOP=1 is required to keep the
+ * address pointer at GPIO (0x09) after writing GPIO.
+ * Writing GPIO updates OLAT for output bits GP4..GP7, while reading
+ * GPIO samples the live row pins GP0..GP3.
+ * The 5us settle time after column latch is retained. */
+static uint8_t SoftI2C_ColumnRead(uint8_t addr7, uint8_t outputs, uint8_t *gpio)
+{
+  if (gpio == NULL) return 0U;
+
+  SoftI2C_Start();
+  const uint8_t cmd_ok =
+       SoftI2C_WriteByte((uint8_t)(addr7 << 1U)) &&
+       SoftI2C_WriteByte(MCP23008_REG_GPIO) &&
+       SoftI2C_WriteByte(outputs);
+  if (cmd_ok == 0U)
+  {
+    SoftI2C_Stop();
+    return 0U;
+  }
+
+  DelayUs(5U);
+  SoftI2C_Start();
+  if (SoftI2C_WriteByte((uint8_t)((addr7 << 1U) | 1U)) == 0U)
+  {
+    SoftI2C_Stop();
+    return 0U;
+  }
+  *gpio = SoftI2C_ReadByte(0U);
+  SoftI2C_Stop();
+  return 1U;
+}
+
+
+static uint8_t HwI2C_AnyDeviceReady(void)
+{
+  if (g_hw_i2c_online == 0U) return 0U;
+  for (uint8_t i = 0U; i < MCP23008_COUNT; ++i)
+  {
+    if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(g_mcp_addrs[i] << 1U), 1U,
+                              HW_I2C_TIMEOUT_MS) == HAL_OK) return 1U;
+  }
+  return 0U;
+}
+
+static void HwI2C_FallbackToSoftware(void)
+{
+  if (hi2c1.Instance == I2C1 && hi2c1.State != HAL_I2C_STATE_RESET)
+    (void)HAL_I2C_DeInit(&hi2c1);
+  __HAL_RCC_I2C1_CLK_DISABLE();
+  __HAL_RCC_I2C1_FORCE_RESET();
+  __HAL_RCC_I2C1_RELEASE_RESET();
+  g_hw_i2c_online = 0U;
+  g_i2c_software_fallback = 1U;
+  SoftI2C_Init();
+
+  printf("[I2C] SOFTWARE FALLBACK: PB8 SCL=%u PB9 SDA=%u, MCP 0x%02X ACK=%u\r\n",
+         (unsigned int)((GPIOB->IDR & HW_I2C_SCL_PIN) != 0U),
+         (unsigned int)((GPIOB->IDR & HW_I2C_SDA_PIN) != 0U),
+         (unsigned int)g_mcp_addrs[0],
+         (unsigned int)SoftI2C_Probe(g_mcp_addrs[0]));
+}
 
 static void HwI2C_Init(void)
 {
   GPIO_InitTypeDef gpio = {0};
+  if (g_i2c_software_fallback != 0U)
+  {
+    SoftI2C_Init();
+    return;
+  }
   g_hw_i2c_online = 0U;
 
   if (hi2c1.Instance == I2C1 && hi2c1.State != HAL_I2C_STATE_RESET)
     (void)HAL_I2C_DeInit(&hi2c1);
   __HAL_RCC_I2C1_CLK_DISABLE();
+  /* Reset the F1 peripheral's BUSY/STOP state before reinitialization. */
+  __HAL_RCC_I2C1_FORCE_RESET();
+  __HAL_RCC_I2C1_RELEASE_RESET();
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_AFIO_CLK_ENABLE();
   __HAL_AFIO_REMAP_I2C1_ENABLE();
@@ -936,10 +1189,39 @@ static void HwI2C_Init(void)
   hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
   g_hw_i2c_online = HAL_I2C_Init(&hi2c1) == HAL_OK ? 1U : 0U;
+
+  if (HwI2C_AnyDeviceReady() == 0U)
+  {
+    printf("[I2C] 400kHz NO ACK; AF_OD idle SCL=%u SDA=%u, SR2=0x%04X, Error=0x%lX\r\n",
+           (unsigned int)((GPIOB->IDR & HW_I2C_SCL_PIN) != 0U),
+           (unsigned int)((GPIOB->IDR & HW_I2C_SDA_PIN) != 0U),
+           (unsigned int)I2C1->SR2, (unsigned long)hi2c1.ErrorCode);
+
+    /* Retry at 100kHz to distinguish Fast-mode rise-time problems from
+     * missing pull-ups or permanently held-low lines. */
+    if (g_hw_i2c_online != 0U)
+    {
+      (void)HAL_I2C_DeInit(&hi2c1);
+      __HAL_RCC_I2C1_FORCE_RESET();
+      __HAL_RCC_I2C1_RELEASE_RESET();
+      hi2c1.Init.ClockSpeed = 100000U;
+      g_hw_i2c_online = HAL_I2C_Init(&hi2c1) == HAL_OK ? 1U : 0U;
+    }
+    if (HwI2C_AnyDeviceReady() == 0U)
+    {
+      printf("[I2C] 100kHz NO ACK; using original software I2C for recovery\r\n");
+      HwI2C_FallbackToSoftware();
+    }
+    else
+      printf("[I2C] Hardware I2C recovered at 100kHz\r\n");
+  }
+  else
+    printf("[I2C] Hardware I2C 400kHz OK\r\n");
 }
 
 static uint8_t HwI2C_Probe(uint8_t addr7)
 {
+  if (g_i2c_software_fallback != 0U) return SoftI2C_Probe(addr7);
   if (g_hw_i2c_online == 0U) return 0U;
   return HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(addr7 << 1U), 1U,
                                HW_I2C_TIMEOUT_MS) == HAL_OK ? 1U : 0U;
@@ -967,6 +1249,7 @@ static void MCP23008_ScanBus(void)
 
 static uint8_t HwI2C_WriteReg(uint8_t addr7, uint8_t reg, uint8_t value)
 {
+  if (g_i2c_software_fallback != 0U) return SoftI2C_WriteReg(addr7, reg, value);
   if (g_hw_i2c_online == 0U) return 0U;
   return HAL_I2C_Mem_Write(&hi2c1, (uint16_t)(addr7 << 1U), reg,
                            I2C_MEMADD_SIZE_8BIT, &value, 1U,
@@ -975,6 +1258,7 @@ static uint8_t HwI2C_WriteReg(uint8_t addr7, uint8_t reg, uint8_t value)
 
 static uint8_t HwI2C_ReadReg(uint8_t addr7, uint8_t reg, uint8_t *value)
 {
+  if (g_i2c_software_fallback != 0U) return SoftI2C_ReadReg(addr7, reg, value);
   if ((g_hw_i2c_online == 0U) || (value == NULL)) return 0U;
   return HAL_I2C_Mem_Read(&hi2c1, (uint16_t)(addr7 << 1U), reg,
                           I2C_MEMADD_SIZE_8BIT, value, 1U,
@@ -987,6 +1271,7 @@ static uint8_t HwI2C_ReadReg(uint8_t addr7, uint8_t reg, uint8_t *value)
  * The extra 5us preserves row settling before reading. */
 static uint8_t MCP23008_ColumnRead(uint8_t addr7, uint8_t outputs, uint8_t *gpio)
 {
+  if (g_i2c_software_fallback != 0U) return SoftI2C_ColumnRead(addr7, outputs, gpio);
   if ((g_hw_i2c_online == 0U) || (gpio == NULL)) return 0U;
   const uint16_t addr8 = (uint16_t)(addr7 << 1U);
   uint8_t payload[2] = {MCP23008_REG_GPIO, outputs};
@@ -1540,8 +1825,9 @@ int main(void)
   printf("USB              : PA11 D- / PA12 D+\r\n");
   printf("MCP23008         : 0x20 direction, 0x23 left1, 0x24 left2, 0x22 left3, 0x21 left4, 0x27 extra\r\n");
   printf("MCP ready        : %u/%u\r\n", (unsigned int)g_mcp_found_count, (unsigned int)MCP23008_COUNT);
-  printf("I2C1 hardware    : PB8/PB9 remap, %lu Hz, init=%s\r\n",
-         (unsigned long)HW_I2C_CLOCK_HZ, g_hw_i2c_online ? "OK" : "FAILED");
+  printf("I2C transport    : %s, %lu Hz\r\n",
+         g_i2c_software_fallback ? "SOFTWARE FALLBACK (internal PU)" : "HARDWARE I2C1",
+         g_i2c_software_fallback ? 0UL : (unsigned long)hi2c1.Init.ClockSpeed);
   printf("Keys             : %u mapped keys\r\n", (unsigned int)KEY_COUNT);
   printf("RGB              : PB6 GPIO bit-bang, %u LEDs\r\n", (unsigned int)LED6028_COUNT);
   printf("========================================\r\n");
