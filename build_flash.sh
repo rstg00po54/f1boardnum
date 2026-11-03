@@ -5,8 +5,10 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 TOOLCHAIN_FILE="$ROOT_DIR/cmake/gcc-arm-none-eabi.cmake"
 ELF_FILE="$BUILD_DIR/f1board.elf"
+BIN_FILE="$BUILD_DIR/f1board.bin"
 
 MODE="${1:-all}"
+BUILD_TYPE="${BUILD_TYPE:-Release}"
 JOBS="${JOBS:-$(nproc)}"
 SWD_SPEED="${SWD_SPEED:-1000}"
 
@@ -34,11 +36,26 @@ log()
 
 check_tools()
 {
-    local tools=(
-        cmake
-        arm-none-eabi-gcc
-        openocd
-    )
+    local tool
+    local tools=()
+    case "$MODE" in
+        all)
+            tools=(cmake arm-none-eabi-gcc arm-none-eabi-size arm-none-eabi-objcopy openocd)
+            ;;
+        build|rebuild)
+            tools=(cmake arm-none-eabi-gcc arm-none-eabi-size arm-none-eabi-objcopy)
+            ;;
+        flash)
+            tools=(openocd)
+            ;;
+        clean)
+            return
+            ;;
+        *)
+            echo "错误：未知操作：$MODE"
+            exit 1
+            ;;
+    esac
 
     for tool in "${tools[@]}"; do
         if ! command -v "$tool" >/dev/null 2>&1; then
@@ -47,8 +64,13 @@ check_tools()
         fi
     done
 
-    echo "ARM GCC : $(command -v arm-none-eabi-gcc)"
-    echo "OpenOCD : $(command -v openocd)"
+    if [[ "$MODE" == "all" || "$MODE" == "build" || "$MODE" == "rebuild" ]]; then
+        echo "ARM GCC : $(command -v arm-none-eabi-gcc)"
+        echo "编译模式 : $BUILD_TYPE"
+    fi
+    if [[ "$MODE" == "all" || "$MODE" == "flash" ]]; then
+        echo "OpenOCD : $(command -v openocd)"
+    fi
 }
 
 configure()
@@ -78,16 +100,15 @@ configure()
         exit 1
     fi
 
-    if [[ ! -f "$BUILD_DIR/CMakeCache.txt" ]]; then
-        log "配置 CMake"
-
-        cmake \
-            -S "$ROOT_DIR" \
-            -B "$BUILD_DIR" \
-            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-    fi
+    # 每次都明确传 BUILD_TYPE，这样即使旧 build 缓存为 Debug
+    # 也会自动切换为 Release，并触发必要的重新编译。
+    log "配置 CMake（$BUILD_TYPE）"
+    cmake \
+        -S "$ROOT_DIR" \
+        -B "$BUILD_DIR" \
+        -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 }
 
 build()
@@ -106,11 +127,14 @@ build()
 
     echo
     arm-none-eabi-size "$ELF_FILE"
+    arm-none-eabi-objcopy -O binary "$ELF_FILE" "$BIN_FILE"
     echo
     file "$ELF_FILE"
+    ls -lh "$BIN_FILE"
 
     echo
     echo "编译完成：$ELF_FILE"
+    echo "可烧录 BIN：$BIN_FILE"
 }
 
 flash()
@@ -140,6 +164,14 @@ clean()
     rm -rf "$BUILD_DIR"
     echo "已删除：$BUILD_DIR"
 }
+
+# 只在真正编译时检查配置，清理/烧录旧固件无需此项。
+if [[ "$MODE" == "all" || "$MODE" == "build" || "$MODE" == "rebuild" ]]; then
+    case "$BUILD_TYPE" in
+        Release|Debug) ;;
+        *) echo "错误：BUILD_TYPE 只能是 Release 或 Debug"; exit 1 ;;
+    esac
+fi
 
 check_tools
 
@@ -174,6 +206,10 @@ case "$MODE" in
         echo "  $0 flash     只烧录"
         echo "  $0 clean     清理"
         echo "  $0 rebuild   清理后重新编译"
+        echo
+        echo "编译默认采用 Release（-Os），避免 Debug 超出 Flash。"
+        echo "  BUILD_TYPE=Debug $0 build   如需调试固件"
+        echo "  JOBS=2 $0 build            限制并行任务"
         exit 1
         ;;
 esac

@@ -1,14 +1,15 @@
-name: KeyFlux STM32 Telemetry Firmware
+name: KeyFlux STM32 Hardware I2C1 400kHz
 
 on:
   push:
-    branches: [keyflux_telemetry]
+    branches: [keyflux_telemetry, keyflux_hw_i2c]
     paths:
       - "Core/**"
+      - "build_flash.sh"
       - "Middlewares/**"
       - ".github/workflows/keyflux-telemetry.yml"
   pull_request:
-    branches: [keyflux_qt]
+    branches: [keyflux_qt, keyflux_telemetry]
     paths:
       - "Core/**"
       - "Middlewares/**"
@@ -26,6 +27,13 @@ jobs:
         run: cmake --preset Release
       - name: Build STM32 firmware
         run: cmake --build --preset Release -j 2
+      - name: Verify local build_flash.sh (Release, no OpenOCD required)
+        run: |
+          bash -n build_flash.sh
+          BUILD_TYPE=Release JOBS=2 bash build_flash.sh build
+          test -s build/f1board.elf
+          test -s build/f1board.bin
+          grep -q 'CMAKE_BUILD_TYPE:STRING=Release' build/CMakeCache.txt
       - name: Binary and size
         run: |
           arm-none-eabi-size build/Release/f1board.elf
@@ -33,7 +41,7 @@ jobs:
       - name: Upload telemetry firmware for hardware testing
         uses: actions/upload-artifact@v4
         with:
-          name: f1board-keyflux-telemetry-firmware
+          name: f1board-hardware-i2c1-400khz-firmware
           path: |
             build/Release/f1board.elf
             build/Release/f1board.bin

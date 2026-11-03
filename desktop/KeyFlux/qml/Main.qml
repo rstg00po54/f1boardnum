@@ -676,16 +676,19 @@ ApplicationWindow {
                             color: "#080e1c"
                             border.color: "#253857"
                             ScrollView {
+                                id: logScroll
                                 anchors.fill: parent
                                 anchors.margins: 7
                                 clip: true
+                                ScrollBar.horizontal.policy: ScrollBar.AsNeeded
+                                ScrollBar.vertical.policy: ScrollBar.AsNeeded
                                 TextArea {
                                     readOnly: true
                                     text: backend.logs
-                                    wrapMode: TextArea.WrapAnywhere
+                                    wrapMode: TextArea.NoWrap
                                     color: "#9ccbb9"
                                     font.family: "Consolas"
-                                    font.pixelSize: 11
+                                    font.pixelSize: 12
                                     selectByMouse: true
                                     background: Item {}
                                 }

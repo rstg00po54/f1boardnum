@@ -128,6 +128,7 @@ private:
     void send(int kind, const QByteArray &data);
     void received(int kind, const QByteArray &data);
     void log(const QString &line);
+    void appendMultiPadLogChunk(const QByteArray &chunk);
     void queryKeychron();
     static QByteArray packet(std::initializer_list<unsigned char> bytes);
 
@@ -145,4 +146,5 @@ private:
     bool m_keychronLogSupported = false;
     Metrics m_metrics;
     QString m_logs;
+    QByteArray m_multiPadLogBuffer; // Reassembles 0x80 HID fragments through LF.
 };

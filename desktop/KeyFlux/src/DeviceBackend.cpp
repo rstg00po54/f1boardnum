@@ -193,7 +193,10 @@ DeviceBackend::DeviceBackend(QObject *parent) : QObject(parent)
         m_workers[i] = worker;
         connect(worker, &HidWorker::deviceStatus, this,
                 [this](int kind, bool detected, bool active) {
-            if (kind == 0 && !active) m_metrics = Metrics{};
+            if (kind == 0 && !active) {
+                m_metrics = Metrics{};
+                m_multiPadLogBuffer.clear(); // Never join fragments across USB sessions.
+            }
             m_detected[kind] = detected;
             m_connected[kind] = active;
             if (active) {
@@ -362,13 +365,44 @@ void DeviceBackend::stopTest()
 {
     if (m_selected == 0 && connected()) send(0, packet({0x07, 0, 0, 0, 0, 0}));
 }
-void DeviceBackend::clearLogs() { m_logs.clear(); emit logsChanged(); }
+void DeviceBackend::clearLogs()
+{
+    m_logs.clear();
+    m_multiPadLogBuffer.clear();
+    emit logsChanged();
+}
 
 void DeviceBackend::log(const QString &line)
 {
     m_logs += line + (line.endsWith('\n') ? QString() : QStringLiteral("\n"));
-    if (m_logs.size() > 18000) m_logs.remove(0, m_logs.size() - 13000);
+    if (m_logs.size() > 18000) {
+        // Trim at a line boundary instead of leaving a broken first line.
+        const int cut = m_logs.indexOf('\n', m_logs.size() - 13000);
+        m_logs.remove(0, cut >= 0 ? cut + 1 : m_logs.size() - 13000);
+    }
     emit logsChanged();
+}
+
+void DeviceBackend::appendMultiPadLogChunk(const QByteArray &chunk)
+{
+    // One WebHID log packet contains at most 30 UTF-8 bytes, NOT a
+    // complete line. A packet may even end within a multibyte character.
+    // Decode only AFTER rebuilding the LF-terminated line.
+    m_multiPadLogBuffer.append(chunk);
+    int lf = -1;
+    while ((lf = m_multiPadLogBuffer.indexOf('\n')) >= 0) {
+        QByteArray rawLine = m_multiPadLogBuffer.left(lf);
+        m_multiPadLogBuffer.remove(0, lf + 1);
+        if (rawLine.endsWith('\r')) rawLine.chop(1);
+        log(QString::fromUtf8(rawLine));
+    }
+
+    // Protect against malformed firmware packets with no terminator.
+    if (m_multiPadLogBuffer.size() > 4096) {
+        log(QString::fromUtf8(m_multiPadLogBuffer.left(4096))
+            + QStringLiteral(" [日志过长，已截断]"));
+        m_multiPadLogBuffer.clear();
+    }
 }
 
 void DeviceBackend::received(int kind, const QByteArray &p)
@@ -380,7 +414,7 @@ void DeviceBackend::received(int kind, const QByteArray &p)
     if (kind == 0) {
         if (op == 0x80 && p.size() > 2) {
             const int count = std::min(byteAt(p, 1), static_cast<int>(p.size()) - 2);
-            if (count > 0) log(QString::fromUtf8(p.constData() + 2, count));
+            if (count > 0) appendMultiPadLogChunk(p.mid(2, count));
             return;
         }
         if (op == 0x83 && p.size() >= 16 && byteAt(p, 1) == 1) {
