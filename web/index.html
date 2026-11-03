@@ -23,6 +23,15 @@ input[type="range"]{width:100%;accent-color:var(--accent)}input[type="color"]{wi
 .test-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:13px 0}
 .test-actions button{padding:9px 14px}
 .test-index{font-size:24px;font-weight:750;font-variant-numeric:tabular-nums}
+.test-keyboard{overflow-x:auto;overscroll-behavior-x:contain;padding:8px 0 3px}
+.test-key-row{display:flex;gap:5px;margin:0 0 5px;min-width:720px}
+.test-key{min-width:35px;flex:1;text-align:center;white-space:nowrap;background:#18263c;color:#cbdaf4;border:1px solid #40516d;border-radius:6px;padding:8px 2px;font-size:11px;font-weight:650;cursor:pointer}
+.test-key.nav{background:#283044;border-color:#6a638b}
+.test-key.active{background:#356bce;border-color:#b4d2ff;box-shadow:0 0 0 1px #91b9ff;color:white}
+.test-key:hover{filter:brightness(1.2)}
+.test-key:disabled{cursor:not-allowed;opacity:.6}
+.test-expected{font-size:20px;font-weight:700;color:#b8d1ff}
+#testMismatchList{font:12px/1.7 ui-monospace,Consolas,monospace;color:#e4bac9;white-space:pre-wrap}
 .test-state{color:#9fc8ff;font-size:13px}
 .note{padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#0b1426;color:var(--muted);font-size:13px;line-height:1.65}
 .board-record{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding-top:8px}
@@ -56,31 +65,42 @@ footer{color:var(--muted);font-size:13px;line-height:1.75;margin-top:22px}
     <p class="muted">固件保留 Fn + Backspace 长按 3 秒的软件重启。重启后需要重新连接。</p>
   </div>
   <div class="card full">
-    <div class="row"><h2>RGB 灯珠定位 / 5 块 PCB 排查</h2><span id="testStatus" class="test-state">等待连接</span></div>
-    <div class="note">逐灯测试严格按照 LED 数据链地址 <strong>0–99</strong> 点亮，不依赖键位映射。先看每颗灯落在哪块 PCB、沿什么方向排列；再用全灯纯红 / 绿 / 蓝检查 5 块板是否有颜色通道不一致。</div>
+    <div class="row"><h2>RGB 逐键点亮校验 · 五块 PCB</h2><span id="testStatus" class="test-state">等待连接</span></div>
+    <div class="note">按<strong>实际键盘视觉位置</strong>从第一排最左边开始，逐颗向右，走完一排再到下一排。网页显示<strong>预期应该亮的键</strong>，你只需要看实物是否一致。对应关系来自 PCB 工程与推测的跨板串联顺序，尚待实机逐键校验。F1–F12 无 RGB 灯珠，暂不列入。</div>
     <div class="test-grid">
-      <div class="control"><label for="testType">测试方式</label><select id="testType" disabled><option value="1">单颗 LED 定位</option><option value="2">全部 LED 颜色检查</option></select></div>
+      <div class="control"><label for="testType">测试方式</label><select id="testType" disabled><option value="1">逐个点亮 LED</option><option value="2">全部 LED 颜色检查</option></select></div>
+      <div class="control"><label for="testOrder">逐灯顺序</label><select id="testOrder" disabled><option value="visual">键盘排列：逐行从左到右（推荐）</option><option value="raw">数据链原始编号：0–99</option></select></div>
       <div class="control"><label for="testColor">测试颜色（低亮度）</label><select id="testColor" disabled><option value="red">纯红</option><option value="green">纯绿</option><option value="blue">纯蓝</option><option value="white">低亮度白色</option></select></div>
+      <div class="control"><label for="testDelay">自动巡检间隔</label><select id="testDelay"><option value="1500">1.5 秒 / 颗</option><option value="2500">2.5 秒 / 颗</option><option value="4000">4 秒 / 颗</option></select></div>
     </div>
     <div class="control">
-      <label for="testIndex">LED 数据链编号 <span id="testIndexText" class="test-index">0 / 99</span></label>
-      <input type="range" id="testIndex" min="0" max="99" value="0" step="1" disabled>
+      <label for="testIndex">测试进度 <span id="testIndexText" class="test-index">1 / 71</span></label>
+      <input type="range" id="testIndex" min="0" max="70" value="0" step="1" disabled>
     </div>
+    <div class="row">
+      <span>预期亮起：<span id="testExpected" class="test-expected">~</span></span>
+      <span class="muted" id="testAddress">数据链 #55 · 左1 板</span>
+    </div>
+    <div class="test-keyboard" id="testKeyboard" aria-label="键盘实际排列图"></div>
     <div class="test-actions">
-      <button id="testStart" disabled>开始测试</button>
+      <button id="testStart" disabled>从第一个键开始</button>
       <button id="testPrev" class="secondary" disabled>上一颗</button>
       <button id="testNext" class="secondary" disabled>下一颗</button>
       <button id="testAuto" class="secondary" disabled>自动巡检</button>
       <button id="testStop" class="secondary" disabled>结束测试 / 恢复灯效</button>
     </div>
-    <div class="board-record">
-      <span class="muted">记录每块 PCB 的首颗 LED：</span>
-      <select id="testBoard" disabled><option value="0">板 1</option><option value="1">板 2</option><option value="2">板 3</option><option value="3">板 4</option><option value="4">板 5</option></select>
-      <button id="markStart" class="secondary" disabled>记录当前编号</button>
-      <button id="copyMarks" class="secondary">复制记录</button>
-      <span id="boardMarks">板 1: ?　板 2: ?　板 3: ?　板 4: ?　板 5: ?</span>
+    <div class="note">
+      <strong>发现亮错位置？</strong>先暂停自动巡检，再在下面选择<strong>实际上亮起的键</strong>，点击「记录不一致」。例如：网页预期 <strong>1</strong>，实物亮 <strong>Enter</strong>，就选 Enter。
+      <div class="board-record">
+        <label for="testActual">实际上：</label>
+        <select id="testActual" disabled><option value="none">没有灯亮</option><option value="multiple">多颗灯同时亮</option></select>
+        <button id="markMismatch" class="secondary" disabled>记录不一致</button>
+        <button id="copyMismatches" class="secondary">复制异常记录</button>
+        <button id="clearMismatches" class="secondary">清空记录</button>
+      </div>
+      <div id="testMismatchList">暂无异常记录</div>
     </div>
-    <p class="muted"><small>提示：不同板的 LED 数量暂时未知，不预设每板 20 颗；测试模式不保存到 Flash。若供电不充足，请优先用单灯模式。</small></p>
+    <p class="muted"><small>“逐行”只改变网页发送的 LED 编号顺序，不需要重新烧录固件，但需要已经支持 0x07 RGB 测试的固件。仅覆盖五块主键盘板的 71 颗灯；若实际跨板接线不同，可用异常记录反向校正映射。</small></p>
   </div>
   <div class="card full">
     <div class="row"><h2>USB HID 实时日志</h2><div class="toolbar"><label><input id="logging" type="checkbox" disabled> 开启日志传输</label><button id="clear" class="secondary">清空</button><button id="save" class="secondary">保存日志</button></div></div>
