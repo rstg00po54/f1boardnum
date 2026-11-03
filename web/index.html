@@ -122,15 +122,73 @@ let sendQueue = Promise.resolve();
 let logText = '';
 const decoder = new TextDecoder();
 const controls = ['mode','color','brightness','speed','logging','refresh'];
-const diagnosticControls = ['testType','testColor','testIndex','testPrev','testNext','testStart','testStop','testAuto','testBoard','markStart'];
+const diagnosticControls = ['testType','testOrder','testColor','testIndex','testPrev','testNext','testStart','testStop','testAuto','testActual','markMismatch'];
 const diagnosticColors = {red:[48,0,0], green:[0,48,0], blue:[0,0,48], white:[12,12,12]};
+/* Derived from EasyEDA Pro schematic. Each row is LEFT->RIGHT across the five
+ * main PCB boards (not the separate numpad); F1-F12 do not have RGB in this
+ * project. The LED address is inferred from the data-chain board order:
+ * direction -> right4 -> left3 -> left2 -> left1.
+ * Treat every key as a hypothesis until physically confirmed.
+ */
+const visualRows = [
+  [['~',55],['1',56],['2',57],['3',58],['4',39],['5',40],['6',41],['7',42],['8',24],['9',25],['0',26],['-',10],['=',11],['Back',12],['Ins',0],['Home',1],['PgUp',2]],
+  [['Tab',59],['Q',60],['W',61],['E',43],['R',44],['T',45],['Y',46],['U',27],['I',28],['O',29],['P',30],['[',13],[']',14],['Backslash',15],['Del',3],['End',4],['PgDn',5]],
+  [['Caps',62],['A',63],['S',64],['D',47],['F',48],['G',49],['H',50],['J',31],['K',32],['L',33],[';',16],["'",17],['Enter',18]],
+  [['Shift-L',65],['Z',66],['X',67],['C',51],['V',52],['B',53],['N',35],['M',36],['<',37],['>',38],['?',20],['Shift-R',21],['↑',9]],
+  [['Ctrl-L',68],['Win-L',69],['Alt-L',70],['Space',54],['Alt-R',34],['Fn',22],['Win-R',23],['Ctrl-R',19],['←',6],['↓',7],['→',8]]
+];
+const visualOrder = visualRows.flat().map(([key,led],step) => ({key,led,step}));
+if(visualOrder.length !== 71 || new Set(visualOrder.map(k=>k.led)).size !== 71) {
+  throw new Error('PCB mapping must contain 71 distinct LED addresses');
+}
 let diagnosticSupported = false, testActive = false, testLedCount = 100;
-let autoTimer = null, autoPending = false;
-let boardStarts = [null,null,null,null,null];
+let autoTimer = null, autoPending = false, mismatches = [];
+const boardName = led => led < 10 ? '方向板' : led < 24 ? '右4板' : led < 39 ? '左3板' : led < 55 ? '左2板' : led < 71 ? '左1板' : '未知';
+function visualMode() { return $('testOrder').value === 'visual' && $('testType').value === '1'; }
+function ledForPosition() {
+  return visualMode() ? (visualOrder[Number($('testIndex').value)]?.led ?? 0) : Number($('testIndex').value);
+}
+function updateIndexRange() {
+  $('testIndex').max = String(visualMode() ? visualOrder.length - 1 : testLedCount - 1);
+  if (Number($('testIndex').value) > Number($('testIndex').max)) $('testIndex').value = $('testIndex').max;
+  updateIndexText();
+}
+function setupKeyboard() {
+  let step = 0;
+  for(const row of visualRows) {
+    const line = document.createElement('div');
+    line.className = 'test-key-row';
+    for(const [name,led] of row) {
+      const key = document.createElement('button');
+      key.type = 'button';
+      key.className = 'test-key' + (led < 10 ? ' nav' : '');
+      key.textContent = name;
+      key.title = name + ' · 预计数据链 LED #' + led;
+      key.dataset.step = String(step);
+      key.addEventListener('click', () => {
+        if(!diagnosticSupported || !device || !device.opened) return;
+        stopAuto();
+        $('testType').value = '1';
+        $('testOrder').value = 'visual';
+        updateIndexRange();
+        $('testIndex').value = key.dataset.step;
+        updateIndexText();
+        updateDiagnosticControls();
+        applyTest().catch(()=>{});
+      });
+      line.appendChild(key);
+      step++;
+    }
+    $('testKeyboard').appendChild(line);
+  }
+  for(const item of visualOrder) $('testActual').add(new Option(item.key,'key:'+item.step));
+  updateIndexRange();
+}
+
 function updateDiagnosticControls() {
   const enabled = !!(device && device.opened && diagnosticSupported);
   for (const id of diagnosticControls) $(id).disabled = !enabled;
-  for (const id of ['testIndex','testPrev','testNext','testAuto'])
+  for (const id of ['testIndex','testPrev','testNext','testAuto','testActual','markMismatch'])
     $(id).disabled = !enabled || $('testType').value !== '1';
   $('testAuto').textContent = autoTimer ? '暂停巡检' : '自动巡检';
 }
@@ -174,14 +232,21 @@ function handleReport(event) {
     $('keys').textContent = String(buf[11]);
     $('leds').textContent = String(buf[12]);
     testLedCount = buf[12] || 100;
-    $('testIndex').max = String(testLedCount - 1);
-    if (Number($('testIndex').value) >= testLedCount) $('testIndex').value = String(testLedCount - 1);
+    updateIndexRange();
     diagnosticSupported = buf[1] >= 2;
     if (diagnosticSupported) {
       testActive = buf[13] !== 0;
       if (testActive) {
         $('testType').value = String(buf[13]);
-        $('testIndex').value = String(buf[14]);
+        const wireIndex = buf[14];
+        const visualStep = visualOrder.findIndex(k => k.led === wireIndex);
+        if (visualMode() && visualStep >= 0) {
+          $('testIndex').value = String(visualStep);
+        } else if ($('testType').value === '1') {
+          $('testOrder').value = 'raw';
+          $('testIndex').value = String(wireIndex);
+        }
+        updateIndexRange();
         const color = Object.keys(diagnosticColors).find(k => diagnosticColors[k].every((v,i) => v === buf[15+i]));
         if (color) $('testColor').value = color;
       }
