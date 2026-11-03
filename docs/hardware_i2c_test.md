@@ -16,6 +16,21 @@ Development branch: `keyflux_hw_i2c` (based on `keyflux_telemetry`; stable `main
 
 A shared I2C bus across six PCBs requires **external pull-up resistors to 3.3V** on SDA/SCL, common GND, acceptable combined bus capacitance and stable contacts. Software internal pull-ups are not a substitute for proper Fast-mode pull-ups. Check 3.3V logic compatibility on the actual board. If errors occur, switch `HW_I2C_CLOCK_HZ` from `400000U` to `100000U` in `Core/Src/main.c` and rebuild.
 
+## Bus stuck low / MCP 0/6 recovery
+
+If KeyFlux shows `MCP 0/6` and `PB8 SCL=0, PB9 SDA=0`, **405Hz and 0.06ms scan measurements are invalid**: no MCP columns have been scanned.
+
+The original software I2C mode uses GPIO input pull-ups (`CRH` nibble `0x8`, `ODR=1` when lines are released). STM32F103 hardware I2C1 requires PB8/PB9 in alternate-function open-drain mode, which does **not** supply the old GPIO input pull-ups. A board relying only on internal pulls can therefore go from `MCP 6/6` to `MCP 0/6` when switched to hardware I2C. Another possibility is an actual short or a device actively holding SCL/SDA low, so physical idle-voltage measurements are needed to distinguish them.
+
+Current test build:
+
+- Resets I2C1 peripheral on recovery and probes configured addresses at 400kHz.
+- If all addresses fail, retries hardware I2C at 100kHz.
+- If hardware still detects no MCP, **automatically switches to the original software I2C protocol with GPIO internal pull-ups**. Log should contain `SOFTWARE FALLBACK`, and after initialization the six MCP devices should be visible again if no other wiring issue is present.
+- It keeps this fallback until reboot, so the keyboard can remain functional while testing. **This does not make hardware 400kHz work without external pull-ups.**
+
+To enable real 400kHz hardware I2C, verify that SCL and SDA each have suitable external resistors (a single pair on the shared bus, typically around 2.2kΩ–4.7kΩ to the **3.3V logic supply**, selected for total bus capacitance and sink current) and that all boards share GND. If unsure, measure the lines with a multimeter when idle; never short SDA/SCL directly to 3.3V. Always disconnect power before adding/removing wiring. With pull-ups fixed, reboot to retry hardware mode.
+
 ## How to test
 
 1. Save a working copy of your old stable `.bin` (for recovery). Have ST-Link / bootloader flashing recovery available.
