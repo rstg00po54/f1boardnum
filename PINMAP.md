@@ -39,7 +39,7 @@
 | Up | R3 | C3 | 0x52 |
 
 ## 软件重启快捷键
-- **Fn + Backspace 长按 3 秒**：执行 STM32 软件复位（`NVIC_SystemReset()`），正常重新启动键盘，不是进入 DFU Bootloader。
-- Fn：MCP23008 `0x21`，R2/C3（暂不发送 USB 键值）；Backspace：MCP23008 `0x21`，R3/C0。
-- Fn 按下时 Backspace 不发送给电脑，避免等待重启时误删文字；松开任一键立即取消计时。
+- **Fn + Space 长按 3 秒**：执行 STM32 软件复位（`NVIC_SystemReset()`），正常重新启动键盘，不是进入 DFU Bootloader。
+- Fn：MCP23008 `0x21`，R2/C3（暂不发送 USB 键值）；Space：MCP23008 `0x24`，R3/C3。
+- Fn 按下时 Space 不发送给电脑，避免等待重启时误输入空格；松开任一键立即取消计时。
 - 重启后需至少松开一个按键才能重新触发，防止持续按住时重复重启。
