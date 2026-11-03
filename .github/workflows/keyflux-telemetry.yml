@@ -1,4 +1,4 @@
-name: KeyFlux STM32 Telemetry Firmware
+name: KeyFlux STM32 Hardware I2C1 400kHz
 
 on:
   push:
@@ -33,7 +33,7 @@ jobs:
       - name: Upload telemetry firmware for hardware testing
         uses: actions/upload-artifact@v4
         with:
-          name: f1board-keyflux-telemetry-firmware
+          name: f1board-hardware-i2c1-400khz-firmware
           path: |
             build/Release/f1board.elf
             build/Release/f1board.bin
