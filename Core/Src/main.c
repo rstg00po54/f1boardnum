@@ -295,7 +295,98 @@ static uint8_t g_scan_raw_rbits[MCP23008_COUNT][4];
 static uint8_t g_matrix_prev_rbits[MCP23008_COUNT][4];
 static uint8_t g_led6028[LED6028_COUNT][3];
 
-/* WebHID RGB controller. Mode: off=0, breathe=1, solid=2, rainbow=3. */
+/* RGB spatial mapping: VERIFIED by the user's row-by-row hardware test.
+ * LED #0..70 are the five-piece 87-key main board (not independent numpad).
+ * X uses half-key units (0..34); Y is visible row (0..4).
+ * The serial data chain order jumps between PCB regions and must NOT be used
+ * to calculate a visually coherent rainbow.  Preserve raw LED numbering for
+ * 0x07 diagnostic commands and preserve the original 100-pixel chain size.
+ */
+#define LED6028_SPATIAL_COUNT        71U
+#define LED6028_SPATIAL_X_PERIOD     36U
+#define LED6028_SPATIAL_Y_PERIOD      5U
+typedef struct
+{
+  uint8_t x;
+  uint8_t y;
+} LED6028_Position;
+static const LED6028_Position g_led6028_xy[LED6028_SPATIAL_COUNT] =
+{
+  {30U, 0U}, /* LED #00 Ins */
+  {32U, 0U}, /* LED #01 Home */
+  {34U, 0U}, /* LED #02 PgUp */
+  {30U, 1U}, /* LED #03 Del */
+  {32U, 1U}, /* LED #04 End */
+  {34U, 1U}, /* LED #05 PgDn */
+  {30U, 4U}, /* LED #06 ← */
+  {32U, 4U}, /* LED #07 ↓ */
+  {34U, 4U}, /* LED #08 → */
+  {32U, 3U}, /* LED #09 ↑ */
+  {22U, 0U}, /* LED #10 - */
+  {24U, 0U}, /* LED #11 = */
+  {26U, 0U}, /* LED #12 Back */
+  {23U, 1U}, /* LED #13 [ */
+  {25U, 1U}, /* LED #14 ] */
+  {27U, 1U}, /* LED #15 Backslash */
+  {22U, 2U}, /* LED #16 ; */
+  {24U, 2U}, /* LED #17 ' */
+  {26U, 2U}, /* LED #18 Enter */
+  {26U, 4U}, /* LED #19 Ctrl-R */
+  {22U, 3U}, /* LED #20 ? */
+  {26U, 3U}, /* LED #21 Shift-R */
+  {22U, 4U}, /* LED #22 Fn */
+  {24U, 4U}, /* LED #23 Win-R */
+  {16U, 0U}, /* LED #24 8 */
+  {18U, 0U}, /* LED #25 9 */
+  {20U, 0U}, /* LED #26 0 */
+  {15U, 1U}, /* LED #27 U */
+  {17U, 1U}, /* LED #28 I */
+  {19U, 1U}, /* LED #29 O */
+  {21U, 1U}, /* LED #30 P */
+  {16U, 2U}, /* LED #31 J */
+  {18U, 2U}, /* LED #32 K */
+  {20U, 2U}, /* LED #33 L */
+  {20U, 4U}, /* LED #34 Alt-R */
+  {14U, 3U}, /* LED #35 N */
+  {16U, 3U}, /* LED #36 M */
+  {18U, 3U}, /* LED #37 < */
+  {20U, 3U}, /* LED #38 > */
+  { 8U, 0U}, /* LED #39 4 */
+  {10U, 0U}, /* LED #40 5 */
+  {12U, 0U}, /* LED #41 6 */
+  {14U, 0U}, /* LED #42 7 */
+  { 7U, 1U}, /* LED #43 E */
+  { 9U, 1U}, /* LED #44 R */
+  {11U, 1U}, /* LED #45 T */
+  {13U, 1U}, /* LED #46 Y */
+  { 8U, 2U}, /* LED #47 D */
+  {10U, 2U}, /* LED #48 F */
+  {12U, 2U}, /* LED #49 G */
+  {14U, 2U}, /* LED #50 H */
+  { 8U, 3U}, /* LED #51 C */
+  {10U, 3U}, /* LED #52 V */
+  {12U, 3U}, /* LED #53 B */
+  {12U, 4U}, /* LED #54 Space */
+  { 0U, 0U}, /* LED #55 ~ */
+  { 2U, 0U}, /* LED #56 1 */
+  { 4U, 0U}, /* LED #57 2 */
+  { 6U, 0U}, /* LED #58 3 */
+  { 1U, 1U}, /* LED #59 Tab */
+  { 3U, 1U}, /* LED #60 Q */
+  { 5U, 1U}, /* LED #61 W */
+  { 2U, 2U}, /* LED #62 Caps */
+  { 4U, 2U}, /* LED #63 A */
+  { 6U, 2U}, /* LED #64 S */
+  { 0U, 3U}, /* LED #65 Shift-L */
+  { 4U, 3U}, /* LED #66 Z */
+  { 6U, 3U}, /* LED #67 X */
+  { 0U, 4U}, /* LED #68 Ctrl-L */
+  { 3U, 4U}, /* LED #69 Win-L */
+  { 5U, 4U}, /* LED #70 Alt-L */
+};
+
+
+/* WebHID RGB controller. Mode: off=0, breathe=1, solid=2, horizontal rainbow=3, vertical rainbow=4. */
 #define WEBHID_LOG_QUEUE_SIZE        16U
 static uint8_t g_rgb_mode = 1U;
 static uint8_t g_rgb_red = 128U;
@@ -417,7 +508,7 @@ static void WebHID_Service(void)
         g_webhid_reply[17] = g_rgb_test_blue;
         break;
       case 0x02U:
-        if (command[1] <= 3U)
+        if (command[1] <= 4U)
         {
           g_rgb_test_mode = 0U;
           g_rgb_mode = command[1];
@@ -1144,12 +1235,33 @@ static void Keyboard_UpdateLEDs(uint32_t now)
     scale = (uint8_t)((float)scale * breath);
   }
 
-  if (g_rgb_mode == 3U) /* Moving rainbow */
+  if ((g_rgb_mode == 3U) || (g_rgb_mode == 4U)) /* Spatial rainbow */
   {
+    /* Advance phase at user-selected speed, independent of wiring order.
+     * Division happens before truncation to avoid 32-bit now * speed overflow.
+     */
+    const uint8_t phase = (uint8_t)((now / 80U) * g_rgb_speed);
     for (uint8_t i = 0U; i < LED6028_COUNT; i++)
     {
-      uint8_t hue = (uint8_t)(((uint32_t)i * 256U / LED6028_COUNT) +
-                              (now * g_rgb_speed / 80U));
+      uint8_t hue;
+      if (i < LED6028_SPATIAL_COUNT)
+      {
+        const LED6028_Position *pos = &g_led6028_xy[i];
+        /* One coherent wavelength across the keyboard's visible width/
+         * height. No discontinuity at the four PCB boundaries.
+         */
+        hue = (g_rgb_mode == 3U)
+          ? (uint8_t)(((uint16_t)pos->x * 256U) / LED6028_SPATIAL_X_PERIOD + phase)
+          : (uint8_t)(((uint16_t)pos->y * 256U) / LED6028_SPATIAL_Y_PERIOD + phase);
+      }
+      else
+      {
+        /* Unmapped extra LEDs (numpad or future expansion): leave working
+         * with the previous wire-index rainbow until their physical layout
+         * is verified in hardware.
+         */
+        hue = (uint8_t)(((uint32_t)i * 256U / LED6028_COUNT) + phase);
+      }
       LED6028_ColorWheel(hue, &red, &green, &blue);
       LED6028_SetPixel(i, (uint8_t)(((uint16_t)red * scale) / 255U),
                          (uint8_t)(((uint16_t)green * scale) / 255U),
