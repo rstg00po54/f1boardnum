@@ -52,11 +52,11 @@ footer{color:var(--muted);font-size:13px;line-height:1.75;margin-top:22px}
 <section class="grid">
   <div class="card">
     <h2>灯光控制</h2>
-    <div class="control"><label for="mode">灯效模式</label><select id="mode" disabled><option value="0">关闭</option><option value="1" selected>呼吸</option><option value="2">常亮</option><option value="3">彩虹流动</option></select></div>
+    <div class="control"><label for="mode">灯效模式</label><select id="mode" disabled><option value="0">关闭</option><option value="1" selected>呼吸</option><option value="2">常亮</option><option value="3">彩虹 · 从左向右（空间映射）</option><option value="4">彩虹 · 从上向下（空间映射）</option></select></div>
     <div class="control"><label for="color">基础颜色 <span id="hex">#802032</span></label><input type="color" id="color" value="#802032" disabled></div>
     <div class="control"><label for="brightness">亮度 <span id="brightnessVal">180</span></label><input type="range" min="0" max="255" id="brightness" value="180" disabled></div>
     <div class="control"><label for="speed">速度 <span id="speedVal">5</span></label><input type="range" min="1" max="10" id="speed" value="5" disabled></div>
-    <p class="muted"><small>设置直接生效；当前版本尚未写入 Flash，重新上电会恢复默认灯效。</small></p>
+    <p class="muted"><small>横向/纵向彩虹基于已实机验证的 71 颗主键盘 LED 位置映射，五块 PCB 的渐变方向一致。额外未映射灯珠暂保留旧算法。设置直接生效，重新上电恢复默认灯效。</small></p>
   </div>
   <div class="card">
     <h2>键盘状态</h2>
