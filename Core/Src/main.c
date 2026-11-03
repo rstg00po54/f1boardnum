@@ -248,6 +248,8 @@ static uint8_t g_report_pending = 1U;
 static uint8_t g_mcp_ready[MCP23008_COUNT];
 static uint8_t g_mcp_found_count = 0U;
 static uint8_t g_scan_raw_rbits[MCP23008_COUNT][4];
+/* Previous raw row bits for every column, including currently unmapped keys. */
+static uint8_t g_matrix_prev_rbits[MCP23008_COUNT][4];
 static uint8_t g_led6028[LED6028_COUNT][3];
 /* USER CODE END PV */
 
@@ -613,6 +615,7 @@ static void Keyboard_Init(void)
   memset(g_hid_report, 0, sizeof(g_hid_report));
   memset(g_mcp_ready, 0, sizeof(g_mcp_ready));
   memset(g_scan_raw_rbits, 0x0F, sizeof(g_scan_raw_rbits));
+  memset(g_matrix_prev_rbits, 0x0F, sizeof(g_matrix_prev_rbits));
   g_report_pending = 1U;
 }
 
@@ -716,7 +719,28 @@ static void Keyboard_Scan(void)
         break;
       }
 
-      g_scan_raw_rbits[dev][col] = (uint8_t)(gpio & 0x0FU);
+      /* Log physical switch edges on all six MCPs, even for keys without
+       * entries in g_keymap (e.g. an Fn switch whose wiring is unverified).
+       * A row is active low; GP3=R0, GP2=R1, GP1=R2, GP0=R3.
+       */
+      uint8_t rows_now = (uint8_t)(gpio & 0x0FU);
+      uint8_t changed = (uint8_t)(g_matrix_prev_rbits[dev][col] ^ rows_now);
+      g_scan_raw_rbits[dev][col] = rows_now;
+      g_matrix_prev_rbits[dev][col] = rows_now;
+      if (changed != 0U)
+      {
+        for (uint8_t row = 0U; row < 4U; row++)
+        {
+          uint8_t bit = (uint8_t)(1U << (3U - row));
+          if ((changed & bit) != 0U)
+          {
+            printf("[MATRIX] %s MCP=0x%02X R%u C%u (GP%u)\r\n",
+                   ((rows_now & bit) == 0U) ? "DOWN" : "UP",
+                   (unsigned int)addr, (unsigned int)row,
+                   (unsigned int)col, (unsigned int)(3U - row));
+          }
+        }
+      }
       for (uint8_t i = 0U; i < KEY_COUNT; i++)
       {
         if ((g_keymap[i].addr == addr) && (g_keymap[i].col == col))
