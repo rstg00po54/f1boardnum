@@ -5,6 +5,7 @@ on:
     branches: [keyflux_telemetry, keyflux_hw_i2c]
     paths:
       - "Core/**"
+      - "build_flash.sh"
       - "Middlewares/**"
       - ".github/workflows/keyflux-telemetry.yml"
   pull_request:
@@ -26,6 +27,13 @@ jobs:
         run: cmake --preset Release
       - name: Build STM32 firmware
         run: cmake --build --preset Release -j 2
+      - name: Verify local build_flash.sh (Release, no OpenOCD required)
+        run: |
+          bash -n build_flash.sh
+          BUILD_TYPE=Release JOBS=2 bash build_flash.sh build
+          test -s build/f1board.elf
+          test -s build/f1board.bin
+          grep -q 'CMAKE_BUILD_TYPE:STRING=Release' build/CMakeCache.txt
       - name: Binary and size
         run: |
           arm-none-eabi-size build/Release/f1board.elf
