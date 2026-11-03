@@ -1047,33 +1047,85 @@ static void LED6028_Show(void)
   DelayUs(LED6028_RESET_US);
 }
 
-static void Keyboard_UpdateLEDs(uint8_t breath_level)
+/* Standard RGB color wheel: 0..255 -> red/green/blue. */
+static void LED6028_ColorWheel(uint8_t hue, uint8_t *red, uint8_t *green, uint8_t *blue)
 {
-  uint8_t r = (uint8_t)(((uint16_t)LED6028_BG_R_MAX * breath_level) / LED6028_BREATH_MAX);
-  uint8_t g = (uint8_t)(((uint16_t)LED6028_BG_G_MAX * breath_level) / LED6028_BREATH_MAX);
-  uint8_t b = (uint8_t)(((uint16_t)LED6028_BG_B_MAX * breath_level) / LED6028_BREATH_MAX);
-
-  LED6028_SetAll(r, g, b);
-  for (uint8_t i = 0U; i < KEY_COUNT; i++)
+  if (hue < 85U)
   {
-    if ((g_key_state[i] != 0U) && (g_keymap[i].led != LED_NONE))
-      LED6028_SetPixel(g_keymap[i].led, LED6028_PRESSED_LEVEL, LED6028_PRESSED_LEVEL, LED6028_PRESSED_LEVEL);
+    *red = (uint8_t)(255U - hue * 3U);
+    *green = (uint8_t)(hue * 3U);
+    *blue = 0U;
+  }
+  else if (hue < 170U)
+  {
+    hue = (uint8_t)(hue - 85U);
+    *red = 0U;
+    *green = (uint8_t)(255U - hue * 3U);
+    *blue = (uint8_t)(hue * 3U);
+  }
+  else
+  {
+    hue = (uint8_t)(hue - 170U);
+    *red = (uint8_t)(hue * 3U);
+    *green = 0U;
+    *blue = (uint8_t)(255U - hue * 3U);
+  }
+}
+
+static void Keyboard_UpdateLEDs(uint32_t now)
+{
+  uint8_t scale = g_rgb_brightness;
+  uint8_t red, green, blue;
+
+  if (g_rgb_mode == 0U)
+    scale = 0U;
+  else if (g_rgb_mode == 1U)
+  {
+    uint32_t period = (LED6028_BREATH_PERIOD_MS * 5U) / g_rgb_speed;
+    float phase = (float)(now % period) / (float)period;
+    float breath = 0.5f - 0.5f * cosf(2.0f * 3.1415926f * phase);
+    scale = (uint8_t)((float)scale * breath);
+  }
+
+  if (g_rgb_mode == 3U) /* Moving rainbow */
+  {
+    for (uint8_t i = 0U; i < LED6028_COUNT; i++)
+    {
+      uint8_t hue = (uint8_t)(((uint32_t)i * 256U / LED6028_COUNT) +
+                              (now * g_rgb_speed / 80U));
+      LED6028_ColorWheel(hue, &red, &green, &blue);
+      LED6028_SetPixel(i, (uint8_t)(((uint16_t)red * scale) / 255U),
+                         (uint8_t)(((uint16_t)green * scale) / 255U),
+                         (uint8_t)(((uint16_t)blue * scale) / 255U));
+    }
+  }
+  else /* Off, breathing or solid */
+  {
+    red = (uint8_t)(((uint16_t)g_rgb_red * scale) / 255U);
+    green = (uint8_t)(((uint16_t)g_rgb_green * scale) / 255U);
+    blue = (uint8_t)(((uint16_t)g_rgb_blue * scale) / 255U);
+    LED6028_SetAll(red, green, blue);
+  }
+
+  /* Preserve the ten existing direction-board press highlights. */
+  if (g_rgb_mode != 0U)
+  {
+    for (uint8_t i = 0U; i < KEY_COUNT; i++)
+    {
+      if ((g_key_state[i] != 0U) && (g_keymap[i].led != LED_NONE))
+        LED6028_SetPixel(g_keymap[i].led, LED6028_PRESSED_LEVEL,
+                        LED6028_PRESSED_LEVEL, LED6028_PRESSED_LEVEL);
+    }
   }
   LED6028_Show();
 }
 
-static void LED6028_BreathService(uint32_t ms)
+static void LED6028_BreathService(uint32_t now)
 {
   static uint32_t last_update = 0U;
-  float phase, breath;
-  uint32_t level;
-
-  if ((uint32_t)(ms - last_update) < LED6028_BREATH_UPDATE_MS) return;
-  last_update = ms;
-  phase = (float)(ms % LED6028_BREATH_PERIOD_MS) / (float)LED6028_BREATH_PERIOD_MS;
-  breath = 0.5f - 0.5f * cosf(2.0f * 3.1415926f * phase);
-  level = (uint32_t)((float)LED6028_BREATH_RANGE * breath);
-  Keyboard_UpdateLEDs((uint8_t)(LED6028_BREATH_MIN + level));
+  if ((uint32_t)(now - last_update) < LED6028_BREATH_UPDATE_MS) return;
+  last_update = now;
+  Keyboard_UpdateLEDs(now);
 }
 /* USER CODE END 0 */
 
