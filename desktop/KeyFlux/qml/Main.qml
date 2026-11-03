@@ -103,6 +103,25 @@ ApplicationWindow {
         radius: 17
     }
 
+    component MetricCard: Rectangle {
+        property string caption: ""
+        property string reading: "—"
+        property string subtitle: ""
+        Layout.fillWidth: true
+        Layout.preferredHeight: 79
+        radius: 11
+        color: "#0c172a"
+        border.color: "#2a3e5b"
+        Column {
+            anchors.fill: parent
+            anchors.margins: 12
+            spacing: 4
+            Text { text: caption; color: "#93a5c3"; font.pixelSize: 11 }
+            Text { text: reading; color: "#eaf3ff"; font.bold: true; font.pixelSize: 21 }
+            Text { text: subtitle; color: "#6f88a9"; font.pixelSize: 10 }
+        }
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 0
@@ -281,6 +300,84 @@ ApplicationWindow {
                         Text { text: backend.info; color: root.textMuted; font.pixelSize: 12 }
                     }
                     ActionButton { text: "↻ 刷新状态"; enabled: backend.connected; onClicked: backend.refresh() }
+                }
+
+                Panel {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 30
+                    Layout.rightMargin: 30
+                    Layout.preferredHeight: 271
+                    visible: backend.selectedDevice === 0
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 17
+                        spacing: 10
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text {
+                                text: "STM32 实时性能"
+                                color: root.textPrimary
+                                font.pixelSize: 17
+                                font.bold: true
+                            }
+                            Item { Layout.fillWidth: true }
+                            Rectangle {
+                                width: 9; height: 9; radius: 5
+                                color: backend.metricsAvailable ? "#4be0a4" : "#687590"
+                            }
+                            Text {
+                                text: backend.metricsAvailable ? "实时采样 · " + backend.metricsWindowMs + " ms"
+                                     : backend.multiConnected ? "固件暂未回传 · 需刷遥测版"
+                                     : "待连接 STM32"
+                                font.pixelSize: 11
+                                color: backend.metricsAvailable ? "#79e8b8" : root.textMuted
+                            }
+                        }
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 3
+                            columnSpacing: 10
+                            rowSpacing: 8
+                            MetricCard {
+                                caption: "USB 标称轮询"
+                                reading: backend.metricsAvailable ? backend.usbPollingHz + " Hz" : "—"
+                                subtitle: "USB 描述符 bInterval · 非实测"
+                            }
+                            MetricCard {
+                                caption: "实际矩阵扫描"
+                                reading: backend.metricsAvailable ? backend.scanHz + " Hz" : "—"
+                                subtitle: "每秒完成的扫描次数"
+                            }
+                            MetricCard {
+                                caption: "CPU 活跃占比"
+                                reading: backend.metricsAvailable ? (backend.cpuActivePermille / 10).toFixed(1) + "%" : "—"
+                                subtitle: "DWT 主循环估算 · WFI 空闲"
+                            }
+                            MetricCard {
+                                caption: "单次扫描平均耗时"
+                                reading: backend.metricsAvailable ? (backend.scanAvgUs / 1000).toFixed(2) + " ms" : "—"
+                                subtitle: "6 组 MCP23008 · 实测"
+                            }
+                            MetricCard {
+                                caption: "单次扫描最大耗时"
+                                reading: backend.metricsAvailable ? (backend.scanMaxUs / 1000).toFixed(2) + " ms" : "—"
+                                subtitle: "最近采样窗口的最大值"
+                            }
+                            MetricCard {
+                                caption: "HID 报告提交速率"
+                                reading: backend.metricsAvailable ? backend.hidReportHz + " 次/s" : "—"
+                                subtitle: "仅在按键状态变化时发送"
+                            }
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: "注意：CPU 为前台活跃时间估计；USB 100 Hz 是端点配置，不代表真实端到端按键延迟。"
+                            font.pixelSize: 10
+                            color: root.textMuted
+                            wrapMode: Text.WordWrap
+                        }
+                    }
                 }
 
                 Panel {
