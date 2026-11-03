@@ -25,6 +25,16 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 
 #define KEY_SCAN_PERIOD_MS             2U
 #define KEY_DEBOUNCE_COUNT             1U
+/* Hold physical Fn (0x21 R2/C3) + Backspace (0x21 R3/C0)
+ * for three seconds to reboot. The combo cannot be triggered by USB.
+ */
+#define KEY_REBOOT_HOLD_MS           3000U
+#define KEY_FN_MCP_ADDR              0x21U
+#define KEY_FN_ROW                   2U
+#define KEY_FN_COL                   3U
+#define KEY_BACKSPACE_MCP_ADDR       0x21U
+#define KEY_BACKSPACE_ROW            3U
+#define KEY_BACKSPACE_COL            0U
 #define MCP23008_POLL_PERIOD_MS     1000U
 
 #define MCP23008_ADDR_FIRST          0x20U
@@ -257,6 +267,8 @@ static uint8_t MCP23008_InitAll(void);
 static void MCP23008_PollAll(void);
 static void Keyboard_Init(void);
 static void Keyboard_Scan(void);
+static uint8_t Keyboard_KeyDown(uint8_t addr, uint8_t row, uint8_t col);
+static void Keyboard_RebootShortcut(uint32_t now);
 static void Keyboard_BuildReport(void);
 static void Keyboard_USBService(void);
 static void Keyboard_UpdateLEDs(uint8_t breath_level);
@@ -583,14 +595,71 @@ static void Keyboard_Init(void)
   g_report_pending = 1U;
 }
 
+/* Query the debounced key state by physical coordinates, so VIA/HID
+ * remapping does not change the hardware recovery shortcut.
+ */
+static uint8_t Keyboard_KeyDown(uint8_t addr, uint8_t row, uint8_t col)
+{
+  for (uint8_t i = 0U; i < KEY_COUNT; i++)
+  {
+    if ((g_keymap[i].addr == addr) &&
+        (g_keymap[i].row == row) &&
+        (g_keymap[i].col == col))
+      return g_key_state[i];
+  }
+  return 0U;
+}
+
+static void Keyboard_RebootShortcut(uint32_t now)
+{
+  static uint8_t armed = 0U;
+  static uint8_t holding = 0U;
+  static uint32_t hold_start = 0U;
+
+  const uint8_t fn_down = Keyboard_KeyDown(KEY_FN_MCP_ADDR, KEY_FN_ROW, KEY_FN_COL);
+  const uint8_t backspace_down = Keyboard_KeyDown(KEY_BACKSPACE_MCP_ADDR,
+                                                  KEY_BACKSPACE_ROW, KEY_BACKSPACE_COL);
+
+  /* Do not repeatedly reboot if both keys remain held after a reset.
+   * The shortcut is rearmed once either key has been released.
+   */
+  if ((fn_down == 0U) || (backspace_down == 0U))
+  {
+    armed = 1U;
+    holding = 0U;
+    return;
+  }
+
+  if (armed == 0U) return;
+
+  if (holding == 0U)
+  {
+    hold_start = now;
+    holding = 1U;
+  }
+  else if ((uint32_t)(now - hold_start) >= KEY_REBOOT_HOLD_MS)
+  {
+    printf("[KEYBOARD] Fn+Backspace held 3s: software reboot\r\n");
+    HAL_Delay(25U);
+    NVIC_SystemReset();
+  }
+}
+
 static void Keyboard_BuildReport(void)
 {
   uint8_t report_index = 2U;
+  const uint8_t fn_down = Keyboard_KeyDown(KEY_FN_MCP_ADDR, KEY_FN_ROW, KEY_FN_COL);
   memset(g_hid_report, 0, sizeof(g_hid_report));
 
   for (uint8_t i = 0U; i < KEY_COUNT; i++)
   {
     if (g_key_state[i] == 0U) continue;
+    /* Fn+Backspace must not delete text while waiting for the reboot. */
+    if ((fn_down != 0U) &&
+        (g_keymap[i].addr == KEY_BACKSPACE_MCP_ADDR) &&
+        (g_keymap[i].row == KEY_BACKSPACE_ROW) &&
+        (g_keymap[i].col == KEY_BACKSPACE_COL))
+      continue;
     g_hid_report[0] |= g_keymap[i].mod;
     if ((g_keymap[i].hid != 0U) && (report_index < sizeof(g_hid_report)))
       g_hid_report[report_index++] = g_keymap[i].hid;
@@ -830,6 +899,7 @@ int main(void)
     {
       last_scan_tick = now;
       Keyboard_Scan();
+      Keyboard_RebootShortcut(now);
     }
 
     Keyboard_USBService();
