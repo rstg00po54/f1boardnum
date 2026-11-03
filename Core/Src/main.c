@@ -134,6 +134,24 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 #define HID_KEY_DOWN                 0x51U
 #define HID_KEY_UP                   0x52U
 
+/* USB HID keyboard/keypad page: dedicated numeric keypad usages. */
+#define HID_KEY_KP_NUM_LOCK          0x53U
+#define HID_KEY_KP_DIVIDE            0x54U
+#define HID_KEY_KP_MULTIPLY          0x55U
+#define HID_KEY_KP_MINUS             0x56U
+#define HID_KEY_KP_PLUS              0x57U
+#define HID_KEY_KP_ENTER             0x58U
+#define HID_KEY_KP_1                 0x59U
+#define HID_KEY_KP_2                 0x5AU
+#define HID_KEY_KP_3                 0x5BU
+#define HID_KEY_KP_4                 0x5CU
+#define HID_KEY_KP_5                 0x5DU
+#define HID_KEY_KP_6                 0x5EU
+#define HID_KEY_KP_7                 0x5FU
+#define HID_KEY_KP_8                 0x60U
+#define HID_KEY_KP_9                 0x61U
+#define HID_KEY_KP_DOT               0x63U
+
 #define HID_MOD_LCTRL                0x01U
 #define HID_MOD_LSHIFT               0x02U
 #define HID_MOD_LALT                 0x04U
@@ -236,7 +254,32 @@ static const KeyMapEntry g_keymap[] =
   {0x21U, 0U, 3U, HID_KEY_SLASH,        0U, LED_NONE},
   {0x21U, 1U, 3U, 0U,       HID_MOD_RSHIFT, LED_NONE},
   {0x21U, 2U, 3U, 0U,                  0U, LED_NONE},
-  {0x21U, 3U, 3U, 0U,         HID_MOD_RGUI, LED_NONE}
+  {0x21U, 3U, 3U, 0U,         HID_MOD_RGUI, LED_NONE},
+
+  /* 0x27: 键盘87_小键盘. Verified from EasyEDA Pro PCB PAD_NET.
+   * MCP GP7..GP4 = C0..C3; GP3..GP0 = R0..R3.
+   * The extra U3 switch connects to isolated KEY1/KEY2 nets and has
+   * no MCP matrix connection. No keypad-0 switch is wired here.
+   */
+  {0x27U, 0U, 0U, HID_KEY_KP_NUM_LOCK, 0U, LED_NONE}, /* U1  Num */
+  {0x27U, 0U, 1U, HID_KEY_KP_7,        0U, LED_NONE}, /* U2  7 */
+  {0x27U, 0U, 2U, HID_KEY_KP_4,        0U, LED_NONE}, /* U56 4 */
+  {0x27U, 0U, 3U, HID_KEY_KP_1,        0U, LED_NONE}, /* U62 1 */
+
+  {0x27U, 1U, 0U, HID_KEY_KP_DIVIDE,   0U, LED_NONE}, /* U44 / */
+  {0x27U, 1U, 1U, HID_KEY_KP_8,        0U, LED_NONE}, /* U51 8 */
+  {0x27U, 1U, 2U, HID_KEY_KP_5,        0U, LED_NONE}, /* U57 5 */
+  {0x27U, 1U, 3U, HID_KEY_KP_2,        0U, LED_NONE}, /* U63 2 */
+
+  {0x27U, 2U, 0U, HID_KEY_KP_MULTIPLY, 0U, LED_NONE}, /* U71 * */
+  {0x27U, 2U, 1U, HID_KEY_KP_9,        0U, LED_NONE}, /* U73 9 */
+  {0x27U, 2U, 2U, HID_KEY_KP_6,        0U, LED_NONE}, /* U75 6 */
+  {0x27U, 2U, 3U, HID_KEY_KP_3,        0U, LED_NONE}, /* U66 3 */
+
+  {0x27U, 3U, 0U, HID_KEY_KP_MINUS,    0U, LED_NONE}, /* U72 - */
+  {0x27U, 3U, 1U, HID_KEY_KP_PLUS,     0U, LED_NONE}, /* U74 + */
+  {0x27U, 3U, 2U, HID_KEY_KP_ENTER,    0U, LED_NONE}, /* U68 Enter */
+  {0x27U, 3U, 3U, HID_KEY_KP_DOT,      0U, LED_NONE}  /* U67 . */
 };
 
 #define KEY_COUNT ((uint8_t)(sizeof(g_keymap) / sizeof(g_keymap[0])))
@@ -604,6 +647,13 @@ static const char *Keyboard_KeyName(uint8_t hid, uint8_t mod)
     case HID_KEY_INSERT: return "INS"; case HID_KEY_HOME: return "HOME"; case HID_KEY_PAGE_UP: return "PGUP";
     case HID_KEY_DELETE: return "DEL"; case HID_KEY_END: return "END"; case HID_KEY_PAGE_DOWN: return "PGDN";
     case HID_KEY_RIGHT: return "RIGHT"; case HID_KEY_LEFT: return "LEFT"; case HID_KEY_DOWN: return "DOWN"; case HID_KEY_UP: return "UP";
+    case HID_KEY_KP_NUM_LOCK: return "KP_NUMLOCK"; case HID_KEY_KP_DIVIDE: return "KP_DIVIDE";
+    case HID_KEY_KP_MULTIPLY: return "KP_MULTIPLY"; case HID_KEY_KP_MINUS: return "KP_MINUS";
+    case HID_KEY_KP_PLUS: return "KP_PLUS"; case HID_KEY_KP_ENTER: return "KP_ENTER";
+    case HID_KEY_KP_1: return "KP_1"; case HID_KEY_KP_2: return "KP_2"; case HID_KEY_KP_3: return "KP_3";
+    case HID_KEY_KP_4: return "KP_4"; case HID_KEY_KP_5: return "KP_5"; case HID_KEY_KP_6: return "KP_6";
+    case HID_KEY_KP_7: return "KP_7"; case HID_KEY_KP_8: return "KP_8"; case HID_KEY_KP_9: return "KP_9";
+    case HID_KEY_KP_DOT: return "KP_DOT";
     default: return "UNMAPPED";
   }
 }
