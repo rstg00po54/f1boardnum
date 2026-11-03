@@ -1,0 +1,44 @@
+name: KeyFlux Windows Qt Build
+
+on:
+  push:
+    branches: [keyflux_qt]
+    paths:
+      - "desktop/KeyFlux/**"
+      - ".github/workflows/keyflux-windows.yml"
+  pull_request:
+    paths:
+      - "desktop/KeyFlux/**"
+      - ".github/workflows/keyflux-windows.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Qt 6 (MSVC)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Configure
+        shell: pwsh
+        run: cmake -S desktop/KeyFlux -B build/keyflux -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+      - name: Compile KeyFlux
+        shell: pwsh
+        run: cmake --build build/keyflux --config Release --parallel
+      - name: Deploy Qt DLLs and QML modules
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "build/keyflux/Release/KeyFlux.exe"
+          windeployqt --release --qmldir desktop/KeyFlux/qml "$exe"
+      - name: Publish portable Windows app
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyFlux-windows-x64
+          path: build/keyflux/Release/
+          if-no-files-found: error
