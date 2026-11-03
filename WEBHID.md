@@ -8,7 +8,7 @@ STM32F103C8T6 原有 USB Boot Keyboard HID（接口 0、EP 0x81、8 字节）保
 
 - 灯效：关闭 / 呼吸 / 常亮 / **按物理坐标从左向右流动的彩虹** / **按物理坐标从上向下流动的彩虹**。基于实机逐键点亮确认的五块主键盘 71 颗 LED 的 X/Y 位置表计算相位；不按数据链顺序计算。
 - **RGB 排查模式（协议 v2）**：单颗 LED 0–99 定位、500ms 自动巡检、全灯低亮度红/绿/蓝/白、在网页记录五块板的起始 LED 编号。测试不依赖键位映射，不会写入 Flash。
-- 可调节颜色、亮度、速度（**仅在 RAM 生效；断电后恢复默认**）。
+- 可调节颜色、亮度、速度（拖动后立即预览，**点击「保存当前灯效到键盘」才写入 Flash，断电/复位后自动恢复**）。
 - USB 日志：网页选择「开启日志」之后，将 `printf()` 的 UART1 内容同步排队发送到 USB HID；若浏览器接收速度不足，优先保护按键输入，可能丢弃部分日志。
 - 页面显示 MCP 在线数量、键位数、RGB 灯数。
 - 原来的 6 颗 MCP、87 个键位、USART1 115200 和 Fn + Backspace 长按 3 秒重启保留。原来的按键高亮只覆盖有 `led` 编号的键位。
@@ -60,10 +60,11 @@ http://localhost:8080/web/
 | `0x05` | 设定速度 | Byte 1: 1-10 |
 | `0x06` | 开关日志 | Byte 1: 0=关、1=开 |
 | `0x07` | RGB 诊断 | Byte 1: 0=退出、1=单灯、2=全灯；Byte 2: LED 编号；Bytes 3–5: R/G/B（固件钳制为 ≤64） |
+| `0x08` | **保存 RGB 配置到 Flash** | 无；仅保存模式、基础颜色、亮度和速度。测试模式下拒绝保存 |
 
 **固件回复**：
 
-- `0x81` 状态：`[0x81, version(2), mode, brightness, red, green, blue, speed, log_enabled, mcp_online, mcp_total, key_count, led_count, test_mode, test_index, test_red, test_green, test_blue, ...]`
+- `0x81` 状态：`[0x81, version(3), mode, brightness, red, green, blue, speed, log_enabled, mcp_online, mcp_total, key_count, led_count, test_mode, test_index, test_red, test_green, test_blue, saved_valid, matches_saved, ...]`
 - `0x82` 回执：`[0x82, command, ok, ...]`；`ok=1` 表示参数已接受
 - `0x80` 日志：`[0x80, length (0-30), 30 bytes UTF-8/ASCII payload]`
 
@@ -95,6 +96,15 @@ http://localhost:8080/web/
 - 仅在每次 MCU 启动时执行一次，不会在正常使用过程中干扰 USB、键盘扫描或 RGB。仅通过编译不能证明 Windows 上一定可以自动重连，需要实际 SWD 烧录复位后检查。
 - 之前横向彩虹的相位公式 `hue = x + phase` 会让颜色向左流；现已改成 `hue = x - phase`，使模式 3 **从左到右**运动。纵向也采用 `hue = y - phase`，让模式 4 **从上到下**运动。
 - 如果 ST-Link 下载器仅写入 Flash、**没有自动触发 MCU 复位/运行**，固件无法执行重连逻辑。仍需在下载器中启用 Run/Reset after programming（或按 MCU RESET），但不应再需要拔 USB 线。
+
+## RGB 灯效断电保存（协议版本 3）
+
+- 通过 WebHID 网页选择灯效模式、颜色、亮度、速度后，点击「**保存当前灯效到键盘**」；必须收到固件 `0x08` 成功应答，且状态显示「已保存到 Flash」，才算保存成功。
+- 重新插拔 USB 或使用 Fn + Backspace 重启后，开机自动读取已保存的配置。若 Flash 中无有效记录或校验失败，就使用默认灯效。**网页的日志开关、RGB 单灯诊断状态都不保存**。
+- **存储安全**：STM32F103C8T6 64KB Flash，链接器将应用限制在前 **62KB**，保留最后两个 **1KB 页**：A `0x0800F800`、B `0x0800FC00`。每次仅擦除非当前有效的页，按半字写入配置及 CRC-16 校验，最后写入提交标记；重新上电取序号最新的有效页。正在写入时掉电，正常情况下旧配置仍然有效。
+- **减小 Flash 磨损**：页面调整只改变 RAM，不执行擦写；点击保存且配置与已保存值相同也不重复写。不要把保存功能改成每帧、每次按键或每次拖动滑块自动写入。
+- **烧录注意**：普通复位/断电不会擦除配置页；但 ST-Link / STM32CubeProgrammer 的 **Full chip erase / Mass erase** 会清除这两页，之后恢复默认灯效。要在重刷固件时保留配置，应选择仅擦除下载文件涉及的页（如工具支持），而不是全片擦除。
+- 初次使用这个版本，需要编译并**重新烧录固件**；只更新网页不能给旧固件增加 Flash 保存功能。旧版 WebHID 协议版本低于 3 时，网页保存按钮会被禁用。
 
 ## 排查
 
