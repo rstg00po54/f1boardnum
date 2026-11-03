@@ -44,7 +44,13 @@ extern "C" {
 #define HID_EPIN_ADDR                 0x81U
 #define HID_EPIN_SIZE                 0x08U
 
-#define USB_HID_CONFIG_DESC_SIZ       34U
+/* Interface 1: independent vendor-defined WebHID (keyboard stays boot HID). */
+#define WEBHID_EPIN_ADDR              0x82U
+#define WEBHID_EPOUT_ADDR             0x02U
+#define WEBHID_PACKET_SIZE            32U
+#define WEBHID_REPORT_DESC_SIZE       25U
+
+#define USB_HID_CONFIG_DESC_SIZ       66U
 #define USB_HID_DESC_SIZ              9U
 #define HID_MOUSE_REPORT_DESC_SIZE    63U
 
@@ -123,6 +129,10 @@ uint8_t USBD_HID_SendReport(USBD_HandleTypeDef *pdev,
                             uint16_t len);
 
 uint32_t USBD_HID_GetPollingInterval(USBD_HandleTypeDef *pdev);
+
+/* Raw vendor WebHID interface. Returns 1 only when a packet was transferred. */
+uint8_t USBD_HID_WebhidRead(USBD_HandleTypeDef *pdev, uint8_t data[WEBHID_PACKET_SIZE]);
+uint8_t USBD_HID_WebhidSend(USBD_HandleTypeDef *pdev, const uint8_t data[WEBHID_PACKET_SIZE]);
 
 /**
   * @}
