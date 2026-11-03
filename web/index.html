@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MultiPad · 灯效与 HID 日志控制台</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;--bg:#090e19;--surface:#131c2d;--line:#2b3851;--ink:#eaf1ff;--muted:#a0acc5;--accent:#7ba7ff}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(140deg,#101b33,var(--bg) 55%);color:var(--ink);min-height:100vh}
+main{max-width:1020px;padding:42px 20px 70px;margin:auto}header{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:28px}
+h1{font-size:clamp(26px,4vw,38px);margin:5px 0}h2{font-size:19px;margin:0 0 20px}.muted,small{color:var(--muted)}p{line-height:1.6;margin:8px 0 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{border:1px solid var(--line);border-radius:18px;background:var(--surface);padding:24px;min-width:0;box-shadow:0 18px 50px #0002}
+.card.full{grid-column:1/-1}button,select,input{font:inherit}button{cursor:pointer;border:1px solid #527fdb;color:white;border-radius:11px;padding:11px 18px;background:#2455aa}
+button.secondary{background:transparent;border-color:var(--line);color:var(--ink)}button:disabled,input:disabled,select:disabled{opacity:.4;cursor:not-allowed}
+button:hover:not(:disabled){filter:brightness(1.17)}.row{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.control{margin:18px 0}.control label{display:flex;justify-content:space-between;gap:12px;margin-bottom:11px;color:var(--muted)}
+select{width:100%;background:#0e1625;border:1px solid var(--line);padding:12px;color:var(--ink);border-radius:9px}
+input[type="range"]{width:100%;accent-color:var(--accent)}input[type="color"]{width:100%;height:43px;background:transparent;border:1px solid var(--line);border-radius:10px;padding:4px}
+.stat{border:1px solid var(--line);border-radius:12px;padding:14px;flex:1;min-width:125px}.stat strong{font-size:24px;display:block}.stat span{font-size:13px;color:var(--muted)}
+#log{height:290px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#080d18;border:1px solid var(--line);border-radius:11px;padding:15px;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;color:#c7e3d4}
+.test-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
+.test-grid .control{margin:8px 0}
+.test-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:13px 0}
+.test-actions button{padding:9px 14px}
+.test-index{font-size:24px;font-weight:750;font-variant-numeric:tabular-nums}
+.test-keyboard{overflow-x:auto;overscroll-behavior-x:contain;padding:8px 0 3px}
+.test-key-row{display:flex;gap:5px;margin:0 0 5px;min-width:720px}
+.test-key{min-width:35px;flex:1;text-align:center;white-space:nowrap;background:#18263c;color:#cbdaf4;border:1px solid #40516d;border-radius:6px;padding:8px 2px;font-size:11px;font-weight:650;cursor:pointer}
+.test-key.nav{background:#283044;border-color:#6a638b}
+.test-key.active{background:#356bce;border-color:#b4d2ff;box-shadow:0 0 0 1px #91b9ff;color:white}
+.test-key:hover{filter:brightness(1.2)}
+.test-key:disabled{cursor:not-allowed;opacity:.6}
+.test-expected{font-size:20px;font-weight:700;color:#b8d1ff}
+#testMismatchList{font:12px/1.7 ui-monospace,Consolas,monospace;color:#e4bac9;white-space:pre-wrap}
+.test-state{color:#9fc8ff;font-size:13px}
+.note{padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#0b1426;color:var(--muted);font-size:13px;line-height:1.65}
+.board-record{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding-top:8px}
+.board-record select{width:auto}
+#boardMarks{color:#a0acc5;white-space:pre-wrap;font-size:12px}
+.status{display:inline-flex;align-items:center;gap:8px;font-size:14px;color:var(--muted)}.status::before{content:"";width:9px;height:9px;background:#de8c82;border-radius:100%}
+.status.live::before{background:#58cfaa}.toolbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap}input[type="checkbox"]{accent-color:#7ba7ff;width:17px;height:17px;vertical-align:middle}
+footer{color:var(--muted);font-size:13px;line-height:1.75;margin-top:22px}
+@media(max-width:680px){.grid,.test-grid{grid-template-columns:1fr}.card.full{grid-column:auto}.card{padding:19px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div><small>STM32F103 · MCP23008 × 6 · 100 RGB</small><h1>MultiPad 控制台</h1><p class="muted">USB WebHID 灯效设置与实时串口日志镜像</p></div>
+  <div class="toolbar"><span id="connection" class="status">未连接</span><button id="connect">连接键盘</button><button id="disconnect" class="secondary" disabled>断开</button></div>
+</header>
+<section class="grid">
+  <div class="card">
+    <h2>灯光控制</h2>
+    <div class="control"><label for="mode">灯效模式</label><select id="mode" disabled><option value="0">关闭</option><option value="1" selected>呼吸</option><option value="2">常亮</option><option value="3">彩虹 · 从左向右（空间映射）</option><option value="4">彩虹 · 从上向下（空间映射）</option></select></div>
+    <div class="control"><label for="color">基础颜色 <span id="hex">#802032</span></label><input type="color" id="color" value="#802032" disabled></div>
+    <div class="control"><label for="brightness">亮度 <span id="brightnessVal">180</span></label><input type="range" min="0" max="255" id="brightness" value="180" disabled></div>
+    <div class="control"><label for="speed">速度 <span id="speedVal">5</span></label><input type="range" min="1" max="10" id="speed" value="5" disabled></div>
+    <div class="row" style="margin-top:14px"><button id="saveRgb" disabled>保存当前灯效到键盘</button><span id="saveRgbStatus" class="muted" style="font-size:13px">尚未连接</span></div>
+    <p class="muted"><small>灯效参数修改后立即预览，只有点击「保存」才写入 STM32 Flash；断电重启自动恢复。横向/纵向彩虹基于 71 颗主键盘 LED 的物理位置映射。诊断测试、日志开关不会被保存。</small></p>
+  </div>
+  <div class="card">
+    <h2>键盘状态</h2>
+    <div class="row"><div class="stat"><strong id="mcp">--/6</strong><span>MCP 在线</span></div><div class="stat"><strong id="keys">--</strong><span>已映射按键</span></div><div class="stat"><strong id="leds">--</strong><span>RGB 灯数</span></div></div>
+    <div class="control"><button id="refresh" class="secondary" disabled>刷新状态</button></div>
+    <p class="muted">固件保留 Fn + Backspace 长按 3 秒的软件重启。重启后需要重新连接。</p>
+  </div>
+  <div class="card full">
+    <div class="row"><h2>RGB 逐键点亮校验 · 五块 PCB</h2><span id="testStatus" class="test-state">等待连接</span></div>
+    <div class="note">按<strong>实际键盘视觉位置</strong>从第一排最左边开始，逐颗向右，走完一排再到下一排。网页显示<strong>预期应该亮的键</strong>，你只需要看实物是否一致。对应关系来自 PCB 工程与推测的跨板串联顺序，尚待实机逐键校验。F1–F12 无 RGB 灯珠，暂不列入。</div>
+    <div class="test-grid">
+      <div class="control"><label for="testType">测试方式</label><select id="testType" disabled><option value="1">逐个点亮 LED</option><option value="2">全部 LED 颜色检查</option></select></div>
+      <div class="control"><label for="testOrder">逐灯顺序</label><select id="testOrder" disabled><option value="visual">键盘排列：逐行从左到右（推荐）</option><option value="raw">数据链原始编号：0–99</option></select></div>
+      <div class="control"><label for="testColor">测试颜色（低亮度）</label><select id="testColor" disabled><option value="red">纯红</option><option value="green">纯绿</option><option value="blue">纯蓝</option><option value="white">低亮度白色</option></select></div>
+      <div class="control"><label for="testDelay">自动巡检间隔</label><select id="testDelay"><option value="1500">1.5 秒 / 颗</option><option value="2500">2.5 秒 / 颗</option><option value="4000">4 秒 / 颗</option></select></div>
+    </div>
+    <div class="control">
+      <label for="testIndex">测试进度 <span id="testIndexText" class="test-index">1 / 71</span></label>
+      <input type="range" id="testIndex" min="0" max="70" value="0" step="1" disabled>
+    </div>
+    <div class="row">
+      <span>预期亮起：<span id="testExpected" class="test-expected">~</span></span>
+      <span class="muted" id="testAddress">数据链 #55 · 左1 板</span>
+    </div>
+    <div class="test-keyboard" id="testKeyboard" aria-label="键盘实际排列图"></div>
+    <div class="test-actions">
+      <button id="testStart" disabled>从第一个键开始</button>
+      <button id="testPrev" class="secondary" disabled>上一颗</button>
+      <button id="testNext" class="secondary" disabled>下一颗</button>
+      <button id="testAuto" class="secondary" disabled>自动巡检</button>
+      <button id="testStop" class="secondary" disabled>结束测试 / 恢复灯效</button>
+    </div>
+    <div class="note">
+      <strong>发现亮错位置？</strong>先暂停自动巡检，再在下面选择<strong>实际上亮起的键</strong>，点击「记录不一致」。例如：网页预期 <strong>1</strong>，实物亮 <strong>Enter</strong>，就选 Enter。
+      <div class="board-record">
+        <label for="testActual">实际上：</label>
+        <select id="testActual" disabled><option value="none">没有灯亮</option><option value="multiple">多颗灯同时亮</option></select>
+        <button id="markMismatch" class="secondary" disabled>记录不一致</button>
+        <button id="copyMismatches" class="secondary">复制异常记录</button>
+        <button id="clearMismatches" class="secondary">清空记录</button>
+      </div>
+      <div id="testMismatchList">暂无异常记录</div>
+    </div>
+    <p class="muted"><small>“逐行”只改变网页发送的 LED 编号顺序，不需要重新烧录固件，但需要已经支持 0x07 RGB 测试的固件。仅覆盖五块主键盘板的 71 颗灯；若实际跨板接线不同，可用异常记录反向校正映射。</small></p>
+  </div>
+  <div class="card full">
+    <div class="row"><h2>USB HID 实时日志</h2><div class="toolbar"><label><input id="logging" type="checkbox" disabled> 开启日志传输</label><button id="clear" class="secondary">清空</button><button id="save" class="secondary">保存日志</button></div></div>
+    <pre id="log" aria-live="polite">按“连接键盘”，在浏览器的设备授权窗口中选择 MultiPad。</pre>
+    <small>来自固件 printf()，包含 I²C 扫描、按键矩阵和系统状态。浏览器接收速度不足时可能丢弃部分日志。</small>
+  </div>
+</section>
+<footer>要求：新版 Chrome 或 Edge、USB 数据线、支持 WebHID 的固件；本机使用 http://localhost:8080/web/ 访问，或通过 HTTPS 部署。此页面不上传任何键盘日志到服务器，所有通信都在浏览器与 USB 设备之间进行。使用的是自定义 WebHID 协议，不是 VIA 固件协议。</footer>
+</main>
+<script>
+'use strict';
+const VID = 0x0483; // STM32Cube default VID: replace with a licensed VID in production.
+const PID = 0x572B; // Current firmware's USB product ID.
+const PAGE = 0xFF60, USAGE = 0x61;
+const $ = id => document.getElementById(id);
+let device = null;
+let pending = null;
+let sendQueue = Promise.resolve();
+let logText = '';
+const decoder = new TextDecoder();
+const controls = ['mode','color','brightness','speed','logging','refresh'];
+const diagnosticControls = ['testType','testOrder','testColor','testIndex','testPrev','testNext','testStart','testStop','testAuto','testActual','markMismatch'];
+const diagnosticColors = {red:[48,0,0], green:[0,48,0], blue:[0,0,48], white:[12,12,12]};
+/* Derived from EasyEDA Pro schematic. Each row is LEFT->RIGHT across the five
+ * main PCB boards (not the separate numpad); F1-F12 do not have RGB in this
+ * project. The LED address is inferred from the data-chain board order:
+ * direction -> right4 -> left3 -> left2 -> left1.
+ * Treat every key as a hypothesis until physically confirmed.
+ */
+const visualRows = [
+  [['~',55],['1',56],['2',57],['3',58],['4',39],['5',40],['6',41],['7',42],['8',24],['9',25],['0',26],['-',10],['=',11],['Back',12],['Ins',0],['Home',1],['PgUp',2]],
+  [['Tab',59],['Q',60],['W',61],['E',43],['R',44],['T',45],['Y',46],['U',27],['I',28],['O',29],['P',30],['[',13],[']',14],['Backslash',15],['Del',3],['End',4],['PgDn',5]],
+  [['Caps',62],['A',63],['S',64],['D',47],['F',48],['G',49],['H',50],['J',31],['K',32],['L',33],[';',16],["'",17],['Enter',18]],
+  [['Shift-L',65],['Z',66],['X',67],['C',51],['V',52],['B',53],['N',35],['M',36],['<',37],['>',38],['?',20],['Shift-R',21],['↑',9]],
+  [['Ctrl-L',68],['Win-L',69],['Alt-L',70],['Space',54],['Alt-R',34],['Fn',22],['Win-R',23],['Ctrl-R',19],['←',6],['↓',7],['→',8]]
+];
+const visualOrder = visualRows.flat().map(([key,led],step) => ({key,led,step}));
+if(visualOrder.length !== 71 || new Set(visualOrder.map(k=>k.led)).size !== 71) {
+  throw new Error('PCB mapping must contain 71 distinct LED addresses');
+}
+let diagnosticSupported = false, testActive = false, testLedCount = 100;
+let rgbSaveSupported = false, rgbSaving = false;
+function updateSaveUi() {
+  const ready = !!(device && device.opened && rgbSaveSupported && !rgbSaving && !testActive);
+  $('saveRgb').disabled = !ready;
+}
+function rgbDirty() {
+  if (rgbSaveSupported) $('saveRgbStatus').textContent = '设置已修改，尚未保存';
+  updateSaveUi();
+}
+let autoTimer = null, autoPending = false, mismatches = [];
+const boardName = led => led < 10 ? '方向板' : led < 24 ? '右4板' : led < 39 ? '左3板' : led < 55 ? '左2板' : led < 71 ? '左1板' : '未知';
+function visualMode() { return $('testOrder').value === 'visual' && $('testType').value === '1'; }
+function ledForPosition() {
+  return visualMode() ? (visualOrder[Number($('testIndex').value)]?.led ?? 0) : Number($('testIndex').value);
+}
+function updateIndexRange() {
+  $('testIndex').max = String(visualMode() ? visualOrder.length - 1 : testLedCount - 1);
+  if (Number($('testIndex').value) > Number($('testIndex').max)) $('testIndex').value = $('testIndex').max;
+  updateIndexText();
+}
+function setupKeyboard() {
+  let step = 0;
+  for(const row of visualRows) {
+    const line = document.createElement('div');
+    line.className = 'test-key-row';
+    for(const [name,led] of row) {
+      const key = document.createElement('button');
+      key.type = 'button';
+      key.className = 'test-key' + (led < 10 ? ' nav' : '');
+      key.textContent = name;
+      key.title = name + ' · 预计数据链 LED #' + led;
+      key.dataset.step = String(step);
+      key.addEventListener('click', () => {
+        if(!diagnosticSupported || !device || !device.opened) return;
+        stopAuto();
+        $('testType').value = '1';
+        $('testOrder').value = 'visual';
+        updateIndexRange();
+        $('testIndex').value = key.dataset.step;
+        updateIndexText();
+        updateDiagnosticControls();
+        applyTest().catch(()=>{});
+      });
+      line.appendChild(key);
+      step++;
+    }
+    $('testKeyboard').appendChild(line);
+  }
+  for(const item of visualOrder) $('testActual').add(new Option(item.key,'key:'+item.step));
+  updateIndexRange();
+}
+
+function updateDiagnosticControls() {
+  const enabled = !!(device && device.opened && diagnosticSupported);
+  for (const id of diagnosticControls) $(id).disabled = !enabled;
+  for (const id of ['testIndex','testPrev','testNext','testAuto','testActual','markMismatch'])
+    $(id).disabled = !enabled || $('testType').value !== '1';
+  $('testAuto').textContent = autoTimer ? '暂停巡检' : '自动巡检';
+}
+function connected(yes) {
+  $('connection').className = 'status' + (yes ? ' live' : '');
+  $('connection').textContent = yes ? 'USB 已连接' : '未连接';
+  $('connect').disabled = yes;
+  $('disconnect').disabled = !yes;
+  for (const id of controls) $(id).disabled = !yes;
+  if (!yes) {
+    stopAuto();
+    diagnosticSupported = false;
+    testActive = false;
+    $('testStatus').textContent = '等待连接';
+  }
+  if (!yes) {
+    rgbSaveSupported = false;
+    rgbSaving = false;
+    $('saveRgbStatus').textContent = '尚未连接';
+  }
+  updateDiagnosticControls();
+  updateSaveUi();
+}
+function appendLog(t) {
+  logText += t;
+  if(logText.length > 200000) logText = logText.slice(-150000);
+  $('log').textContent = logText;
+  $('log').scrollTop = $('log').scrollHeight;
+}
+function handleReport(event) {
+  if (event.device !== device) return;
+  const buf = new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength);
+  if (!buf.length) return;
+  if (buf[0] === 0x80) {
+    appendLog(decoder.decode(buf.subarray(2, 2 + Math.min(buf[1], 30)), {stream:true}));
+    return;
+  }
+  if (buf[0] === 0x81) {
+    $('mode').value = String(buf[2]);
+    $('brightness').value = String(buf[3]);
+    $('brightnessVal').textContent = String(buf[3]);
+    const hex = '#' + Array.from(buf.subarray(4, 7), x => x.toString(16).padStart(2, '0')).join('');
+    $('color').value = hex; $('hex').textContent = hex;
+    $('speed').value = String(buf[7]); $('speedVal').textContent = String(buf[7]);
+    $('logging').checked = !!buf[8];
+    $('mcp').textContent = String(buf[9]) + '/' + String(buf[10]);
+    $('keys').textContent = String(buf[11]);
+    $('leds').textContent = String(buf[12]);
+    testLedCount = buf[12] || 100;
+    updateIndexRange();
+    rgbSaveSupported = buf[1] >= 3;
+    if (!rgbSaveSupported) {
+      $('saveRgbStatus').textContent = '固件版本过旧，请更新固件';
+    } else if (buf[18] === 0) {
+      $('saveRgbStatus').textContent = '尚未保存过灯效';
+    } else {
+      $('saveRgbStatus').textContent = buf[19] ? '已保存到 Flash' : '当前参数尚未保存';
+    }
+    diagnosticSupported = buf[1] >= 2;
+    if (diagnosticSupported) {
+      testActive = buf[13] !== 0;
+      if (testActive) {
+        $('testType').value = String(buf[13]);
+        const wireIndex = buf[14];
+        const visualStep = visualOrder.findIndex(k => k.led === wireIndex);
+        if (visualMode() && visualStep >= 0) {
+          $('testIndex').value = String(visualStep);
+        } else if ($('testType').value === '1') {
+          $('testOrder').value = 'raw';
+          $('testIndex').value = String(wireIndex);
+        }
+        updateIndexRange();
+        const color = Object.keys(diagnosticColors).find(k => diagnosticColors[k].every((v,i) => v === buf[15+i]));
+        if (color) $('testColor').value = color;
+      }
+      $('testStatus').textContent = testActive ? '测试模式已开启' : '就绪 · 固件支持测试';
+      updateIndexText();
+    } else {
+      $('testStatus').textContent = '当前固件不支持 RGB 测试，请更新固件';
+    }
+    updateDiagnosticControls();
+    updateSaveUi();
+  }
+  if (pending && ((buf[0] === 0x81 && pending.command === 1) ||
+      (buf[0] === 0x82 && pending.command === buf[1]))) {
+    const p = pending; pending = null;
+    if (buf[0] === 0x82 && buf[2] === 0) p.reject(new Error('固件拒绝此参数')); else p.resolve(buf);
+  }
+}
+async function sendNow(command, values=[]) {
+  if (!device || !device.opened) throw new Error('键盘尚未连接');
+  const packet = new Uint8Array(32);
+  packet[0] = command; packet.set(values.slice(0,31), 1);
+  const reply = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { if (pending && pending.command === command) { pending=null; reject(new Error('设备响应超时')); } }, 1800);
+    pending = { command, resolve: value => {clearTimeout(timeout);resolve(value);}, reject: err=>{clearTimeout(timeout);reject(err);} };
+  });
+  try { await device.sendReport(0, packet); }
+  catch (err) {if (pending && pending.command === command) {pending.reject(err);pending=null;} throw err;}
+  return reply;
+}
+function enqueue(command, values=[]) {
+  const op = sendQueue.catch(() => {}).then(() => sendNow(command, values));
+  sendQueue = op;
+  return op.catch(e => { appendLog('\n[WEB] ' + e.message + '\n'); throw e; });
+}
+async function connect() {
+  if (!navigator.hid) {alert('当前浏览器不支持 WebHID。请使用新版 Chrome/Edge，并通过 localhost 或 HTTPS 打开本页。');return;}
+  try {
+    const list = await navigator.hid.requestDevice({filters:[{vendorId:VID,productId:PID}]});
+    const choice = list.find(d => d.collections.some(c => c.usagePage === PAGE && c.usage === USAGE));
+    if (!choice) {if(list.length)alert('找到了 USB 键盘，但没有发现专用 WebHID 接口。请刷入 webhid_rgb_console 分支固件。');return;}
+    device = choice;
+    device.addEventListener('inputreport', handleReport);
+    await device.open();
+    connected(true);
+    appendLog('\n[WEB] 已连接 ' + device.productName + '\n');
+    await enqueue(0x01);
+  } catch(err) {appendLog('\n[WEB] 连接失败：'+err.message+'\n');if(device && device.opened) await device.close();device=null;connected(false);}
+}
+async function disconnect() {
+  if(pending){pending.reject(new Error('设备已断开'));pending=null;}
+  if(device && device.opened) await device.close();
+  device=null;connected(false);appendLog('\n[WEB] 已断开\n');
+}
+function updateIndexText() {
+  const n = Number($('testIndex').value);
+  const physical = visualMode();
+  const item = physical ? visualOrder[n] : null;
+  $('testIndexText').textContent = (n + 1) + ' / ' + (physical ? visualOrder.length : testLedCount);
+  $('testExpected').textContent = item ? item.key : (physical ? '未知键位' : '原始 LED #' + n);
+  $('testAddress').textContent = '数据链 #' + (item ? item.led : n) + (item ? ' · ' + boardName(item.led) + '（预期）' : '');
+  for (const key of document.querySelectorAll('.test-key')) {
+    key.classList.toggle('active', physical && Number(key.dataset.step) === n);
+  }
+}
+function stopAuto() {
+  if (autoTimer !== null) clearInterval(autoTimer);
+  autoTimer = null;
+  autoPending = false;
+  if ($('testAuto')) $('testAuto').textContent = '自动巡检';
+}
+function leaveTestUi() {
+  stopAuto();
+  testActive = false;
+  $('testStatus').textContent = '正常灯效模式';
+  updateSaveUi();
+}
+async function applyTest() {
+  if (!diagnosticSupported || !device || !device.opened) return;
+  const kind = Number($('testType').value);
+  const index = ledForPosition();
+  const rgb = diagnosticColors[$('testColor').value];
+  await enqueue(0x07,[kind,index,...rgb]);
+  testActive = true;
+  updateSaveUi();
+  const expect = visualMode() ? ('，预期：' + $('testExpected').textContent) : '';
+  $('testStatus').textContent = kind === 1 ? ('LED #' + index + expect) : '全灯颜色测试中';
+}
+async function stopTest() {
+  stopAuto();
+  if (device && device.opened && diagnosticSupported) await enqueue(0x07,[0,0,0,0,0]);
+  leaveTestUi();
+}
+function changeTestIndex(delta) {
+  const next = Math.min(Number($('testIndex').max), Math.max(0, Number($('testIndex').value) + delta));
+  $('testIndex').value = String(next);
+  updateIndexText();
+  if (testActive) return applyTest();
+  return Promise.resolve();
+}
+function refreshMismatches() {
+  $('testMismatchList').textContent = mismatches.length ?
+    mismatches.map(m => '第 '+m.step+' 步：预期 '+m.expected+' (LED #'+m.led+')，实际 '+m.actual).join('\n') :
+    '暂无异常记录';
+}
+$('testStart').addEventListener('click',()=>{
+  stopAuto();
+  $('testIndex').value = '0';
+  updateIndexText();
+  applyTest().catch(()=>{});
+});
+$('testStop').addEventListener('click',()=>stopTest().catch(()=>{}));
+$('testType').addEventListener('change',()=>{
+  stopAuto();
+  updateIndexRange();
+  updateDiagnosticControls();
+  if (testActive) applyTest().catch(()=>{});
+});
+$('testOrder').addEventListener('change',()=>{
+  stopAuto();
+  $('testIndex').value = '0';
+  updateIndexRange();
+  updateDiagnosticControls();
+  if (testActive) applyTest().catch(()=>{});
+});
+$('testColor').addEventListener('change',()=>{if(testActive) applyTest().catch(()=>{});});
+$('testIndex').addEventListener('input',updateIndexText);
+$('testIndex').addEventListener('change',()=>{stopAuto();updateDiagnosticControls();if(testActive) applyTest().catch(()=>{});});
+$('testPrev').addEventListener('click',()=>changeTestIndex(-1).catch(()=>{}));
+$('testNext').addEventListener('click',()=>changeTestIndex(1).catch(()=>{}));
+$('testAuto').addEventListener('click',async()=>{
+  if(autoTimer!==null){stopAuto();updateDiagnosticControls();return;}
+  if ($('testType').value !== '1') $('testType').value = '1';
+  updateIndexRange();
+  updateDiagnosticControls();
+  try { if(!testActive) await applyTest(); }catch{ return; }
+  autoTimer = setInterval(async()=>{
+    if (autoPending || !device || !device.opened) return;
+    autoPending = true;
+    try {
+      const now = Number($('testIndex').value);
+      $('testIndex').value = String(now + 1 > Number($('testIndex').max) ? 0 : now + 1);
+      updateIndexText();
+      await applyTest();
+    } catch {stopAuto();} finally {autoPending = false;}
+  },Number($('testDelay').value));
+  updateDiagnosticControls();
+});
+$('testDelay').addEventListener('change',()=>{
+  if(autoTimer) {stopAuto();updateDiagnosticControls();}
+});
+$('markMismatch').addEventListener('click',()=>{
+  if(!visualMode()) {
+    $('testStatus').textContent = '请切换到「键盘排列」后记录异常';
+    return;
+  }
+  const n=Number($('testIndex').value);
+  const item=visualOrder[n];
+  const actual=$('testActual').value;
+  const lit=actual==='none'?'无灯亮':actual==='multiple'?'多颗灯亮':visualOrder[Number(actual.split(':')[1])]?.key || '未知';
+  if(lit===item.key) {
+    $('testStatus').textContent = '实际与预期一致，无须记录';
+    return;
+  }
+  mismatches.push({step:n+1,expected:item.key,led:item.led,actual:lit});
+  refreshMismatches();
+  $('testStatus').textContent = '已记录第 '+(n+1)+' 步不一致';
+});
+$('copyMismatches').addEventListener('click',async()=>{
+  const text = 'MultiPad 五块 PCB RGB 视觉顺序校验\n' +
+    '假设连接顺序：方向→右4→左3→左2→左1；只包括71颗主键盘LED。\n' +
+    (mismatches.length ? mismatches.map(m=>'第 '+m.step+' 步: 预期 '+m.expected+', LED #'+m.led+', 实际 '+m.actual).join('\n') : '暂无异常记录');
+  try {await navigator.clipboard.writeText(text);$('testStatus').textContent='已复制异常记录';}
+  catch { $('testStatus').textContent='复制失败，请手动复制下面的记录'; }
+});
+$('clearMismatches').addEventListener('click',()=>{
+  mismatches=[];
+  refreshMismatches();
+});
+setupKeyboard();
+$('connect').addEventListener('click',connect);
+$('disconnect').addEventListener('click',()=>disconnect().catch(e=>appendLog(e.message)));
+$('refresh').addEventListener('click',()=>enqueue(0x01).catch(()=>{}));
+$('saveRgb').addEventListener('click',async()=>{
+  if (!rgbSaveSupported || !device || !device.opened || testActive || rgbSaving) return;
+  rgbSaving = true;
+  $('saveRgbStatus').textContent = '正在写入 Flash…';
+  updateSaveUi();
+  try {
+    await enqueue(0x08);
+    await enqueue(0x01);
+    appendLog('\n[WEB] 灯效配置已写入 STM32 Flash\n');
+  } catch(err) {
+    $('saveRgbStatus').textContent = '保存失败：' + err.message;
+  } finally {
+    rgbSaving = false;
+    updateSaveUi();
+  }
+});
+$('mode').addEventListener('change',e=>{leaveTestUi();enqueue(0x02,[Number(e.target.value)]).then(rgbDirty).catch(()=>{});});
+$('color').addEventListener('change',e=>{
+  const h=e.target.value; $('hex').textContent=h;
+  leaveTestUi();
+  enqueue(0x03,[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)]).then(rgbDirty).catch(()=>{});
+});
+$('brightness').addEventListener('input',e=>$('brightnessVal').textContent=e.target.value);
+$('brightness').addEventListener('change',e=>{leaveTestUi();enqueue(0x04,[Number(e.target.value)]).then(rgbDirty).catch(()=>{});});
+$('speed').addEventListener('input',e=>$('speedVal').textContent=e.target.value);
+$('speed').addEventListener('change',e=>{leaveTestUi();enqueue(0x05,[Number(e.target.value)]).then(rgbDirty).catch(()=>{});});
+$('logging').addEventListener('change',e=>enqueue(0x06,[e.target.checked?1:0]).catch(()=>{}));
+$('clear').addEventListener('click',()=>{logText='';$('log').textContent='';});
+$('save').addEventListener('click',()=>{
+  const blob=new Blob([logText],{type:'text/plain;charset=utf-8'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');
+  a.href=url;a.download='multipad_log.txt';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
+if(navigator.hid) navigator.hid.addEventListener('disconnect',e=>{if(e.device===device)disconnect().catch(()=>{});});
+connected(false);
+</script>
+</body>
+</html>

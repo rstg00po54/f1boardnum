@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stddef.h>
 #include "usbd_hid.h"
 /* USER CODE END Includes */
 
@@ -294,6 +295,155 @@ static uint8_t g_scan_raw_rbits[MCP23008_COUNT][4];
 /* Previous raw row bits for every column, including currently unmapped keys. */
 static uint8_t g_matrix_prev_rbits[MCP23008_COUNT][4];
 static uint8_t g_led6028[LED6028_COUNT][3];
+
+/* RGB spatial mapping: VERIFIED by the user's row-by-row hardware test.
+ * LED #0..70 are the five-piece 87-key main board (not independent numpad).
+ * X uses half-key units (0..34); Y is visible row (0..4).
+ * The serial data chain order jumps between PCB regions and must NOT be used
+ * to calculate a visually coherent rainbow.  Preserve raw LED numbering for
+ * 0x07 diagnostic commands and preserve the original 100-pixel chain size.
+ */
+#define LED6028_SPATIAL_COUNT        71U
+#define LED6028_SPATIAL_X_PERIOD     36U
+#define LED6028_SPATIAL_Y_PERIOD      5U
+typedef struct
+{
+  uint8_t x;
+  uint8_t y;
+} LED6028_Position;
+static const LED6028_Position g_led6028_xy[LED6028_SPATIAL_COUNT] =
+{
+  {30U, 0U}, /* LED #00 Ins */
+  {32U, 0U}, /* LED #01 Home */
+  {34U, 0U}, /* LED #02 PgUp */
+  {30U, 1U}, /* LED #03 Del */
+  {32U, 1U}, /* LED #04 End */
+  {34U, 1U}, /* LED #05 PgDn */
+  {30U, 4U}, /* LED #06 ← */
+  {32U, 4U}, /* LED #07 ↓ */
+  {34U, 4U}, /* LED #08 → */
+  {32U, 3U}, /* LED #09 ↑ */
+  {22U, 0U}, /* LED #10 - */
+  {24U, 0U}, /* LED #11 = */
+  {26U, 0U}, /* LED #12 Back */
+  {23U, 1U}, /* LED #13 [ */
+  {25U, 1U}, /* LED #14 ] */
+  {27U, 1U}, /* LED #15 Backslash */
+  {22U, 2U}, /* LED #16 ; */
+  {24U, 2U}, /* LED #17 ' */
+  {26U, 2U}, /* LED #18 Enter */
+  {26U, 4U}, /* LED #19 Ctrl-R */
+  {22U, 3U}, /* LED #20 ? */
+  {26U, 3U}, /* LED #21 Shift-R */
+  {22U, 4U}, /* LED #22 Fn */
+  {24U, 4U}, /* LED #23 Win-R */
+  {16U, 0U}, /* LED #24 8 */
+  {18U, 0U}, /* LED #25 9 */
+  {20U, 0U}, /* LED #26 0 */
+  {15U, 1U}, /* LED #27 U */
+  {17U, 1U}, /* LED #28 I */
+  {19U, 1U}, /* LED #29 O */
+  {21U, 1U}, /* LED #30 P */
+  {16U, 2U}, /* LED #31 J */
+  {18U, 2U}, /* LED #32 K */
+  {20U, 2U}, /* LED #33 L */
+  {20U, 4U}, /* LED #34 Alt-R */
+  {14U, 3U}, /* LED #35 N */
+  {16U, 3U}, /* LED #36 M */
+  {18U, 3U}, /* LED #37 < */
+  {20U, 3U}, /* LED #38 > */
+  { 8U, 0U}, /* LED #39 4 */
+  {10U, 0U}, /* LED #40 5 */
+  {12U, 0U}, /* LED #41 6 */
+  {14U, 0U}, /* LED #42 7 */
+  { 7U, 1U}, /* LED #43 E */
+  { 9U, 1U}, /* LED #44 R */
+  {11U, 1U}, /* LED #45 T */
+  {13U, 1U}, /* LED #46 Y */
+  { 8U, 2U}, /* LED #47 D */
+  {10U, 2U}, /* LED #48 F */
+  {12U, 2U}, /* LED #49 G */
+  {14U, 2U}, /* LED #50 H */
+  { 8U, 3U}, /* LED #51 C */
+  {10U, 3U}, /* LED #52 V */
+  {12U, 3U}, /* LED #53 B */
+  {12U, 4U}, /* LED #54 Space */
+  { 0U, 0U}, /* LED #55 ~ */
+  { 2U, 0U}, /* LED #56 1 */
+  { 4U, 0U}, /* LED #57 2 */
+  { 6U, 0U}, /* LED #58 3 */
+  { 1U, 1U}, /* LED #59 Tab */
+  { 3U, 1U}, /* LED #60 Q */
+  { 5U, 1U}, /* LED #61 W */
+  { 2U, 2U}, /* LED #62 Caps */
+  { 4U, 2U}, /* LED #63 A */
+  { 6U, 2U}, /* LED #64 S */
+  { 0U, 3U}, /* LED #65 Shift-L */
+  { 4U, 3U}, /* LED #66 Z */
+  { 6U, 3U}, /* LED #67 X */
+  { 0U, 4U}, /* LED #68 Ctrl-L */
+  { 3U, 4U}, /* LED #69 Win-L */
+  { 5U, 4U}, /* LED #70 Alt-L */
+};
+
+
+/* WebHID RGB controller. Mode: off=0, breathe=1, solid=2, horizontal rainbow=3, vertical rainbow=4. */
+#define WEBHID_LOG_QUEUE_SIZE        16U
+static uint8_t g_rgb_mode = 1U;
+static uint8_t g_rgb_red = 128U;
+static uint8_t g_rgb_green = 32U;
+static uint8_t g_rgb_blue = 50U;
+static uint8_t g_rgb_brightness = 180U;
+static uint8_t g_rgb_speed = 5U;
+/* Temporary LED diagnostic mode, independent of the 5 PCB physical layouts.
+ * 0=normal, 1=one LED at index, 2=all LEDs in one low-power test color.
+ * Deliberately never persisted to flash.
+ */
+static uint8_t g_rgb_test_mode = 0U;
+static uint8_t g_rgb_test_index = 0U;
+static uint8_t g_rgb_test_red = 48U;
+static uint8_t g_rgb_test_green = 0U;
+static uint8_t g_rgb_test_blue = 0U;
+/* Persistent RGB configuration for STM32F103C8 (64KB, 1KB erase pages).
+ * Linked firmware ends before 0x0800F800. Use two alternating pages so
+ * power loss during an update leaves the previously valid record intact.
+ * No automatic writes while moving a slider; only explicit SAVE (0x08).
+ */
+#define RGB_STORE_PAGE_A        0x0800F800UL
+#define RGB_STORE_PAGE_B        0x0800FC00UL
+#define RGB_STORE_MAGIC         0x4D505247UL  /* "MPRG" */
+#define RGB_STORE_COMMITTED     0xA55AU
+
+typedef struct
+{
+  uint32_t magic;
+  uint32_t sequence;
+  uint8_t mode;
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+  uint8_t brightness;
+  uint8_t speed;
+  uint8_t reserved0;
+  uint8_t reserved1;
+  uint16_t checksum;
+  uint16_t committed;  /* Program LAST to make partial writes invalid */
+} RGB_StoreRecord;
+
+_Static_assert(sizeof(RGB_StoreRecord) == 20U, "RGB flash record must be 20 bytes");
+_Static_assert(offsetof(RGB_StoreRecord, checksum) == 16U, "Bad RGB record checksum offset");
+_Static_assert(offsetof(RGB_StoreRecord, committed) == 18U, "Bad RGB record commit offset");
+
+static RGB_StoreRecord g_rgb_saved_record;
+static uint8_t g_rgb_saved_valid = 0U;
+static uint8_t g_rgb_saved_slot = 0U;  /* 0=A, 1=B. Meaningful only if valid. */
+
+static uint8_t g_webhid_log_on = 0U;
+static uint8_t g_webhid_reply[WEBHID_PACKET_SIZE];
+static uint8_t g_webhid_reply_pending = 0U;
+static uint8_t g_webhid_log_queue[WEBHID_LOG_QUEUE_SIZE][WEBHID_PACKET_SIZE];
+static uint8_t g_webhid_log_head = 0U;
+static uint8_t g_webhid_log_tail = 0U;
 /* USER CODE END PV */
 
 void SystemClock_Config(void);
@@ -317,7 +467,13 @@ static uint8_t Keyboard_KeyDown(uint8_t addr, uint8_t row, uint8_t col);
 static void Keyboard_RebootShortcut(uint32_t now);
 static void Keyboard_BuildReport(void);
 static void Keyboard_USBService(void);
-static void Keyboard_UpdateLEDs(uint8_t breath_level);
+static void WebHID_Service(void);
+static void WebHID_QueueLog(const char *text, int len);
+static void RGB_StoreLoad(void);
+static uint8_t RGB_StoreSave(void);
+static uint8_t RGB_StoreMatchesCurrent(void);
+static void USB_ForceReenumeration(void);
+static void Keyboard_UpdateLEDs(uint32_t now);
 static void LED6028_Init(void);
 static void LED6028_SetPixel(uint8_t index, uint8_t red, uint8_t green, uint8_t blue);
 static void LED6028_SetAll(uint8_t red, uint8_t green, uint8_t blue);
@@ -326,11 +482,303 @@ static void LED6028_BreathService(uint32_t now);
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
+/* Log packets are queued in the main loop, not transmitted during UART
+ * printf. They are dropped if the browser cannot keep up.
+ */
+static void WebHID_QueueLog(const char *message, int len)
+{
+  if ((g_webhid_log_on == 0U) || (message == NULL) || (len <= 0)) return;
+
+  int offset = 0;
+  while (offset < len)
+  {
+    uint8_t next = (uint8_t)((g_webhid_log_head + 1U) % WEBHID_LOG_QUEUE_SIZE);
+    if (next == g_webhid_log_tail) return; /* Queue full, do not block typing. */
+
+    uint8_t chunk = (uint8_t)(((len - offset) > 30) ? 30 : (len - offset));
+    uint8_t *packet = g_webhid_log_queue[g_webhid_log_head];
+    memset(packet, 0, WEBHID_PACKET_SIZE);
+    packet[0] = 0x80U; /* Text log */
+    packet[1] = chunk;
+    memcpy(packet + 2, message + offset, chunk);
+    g_webhid_log_head = next;
+    offset += chunk;
+  }
+}
+
+/* WebHID application-level protocol, always 32 bytes:
+ * PC->keyboard: 01 status, 02 mode, 03 RGB, 04 brightness,
+ *               05 speed, 06 log on/off, 07 LED diagnostic mode/index/RGB.
+ * Diagnostic 07: [07, mode(0/1/2), index(0..99), R, G, B, ...].
+ * Keyboard->PC: 81 state, 82 command ACK, 80 text log.
+ */
+/* CRC-16/CCITT-FALSE over exactly the first 16 bytes, independent of
+ * any padding. Read-only validation runs on every boot, before USB starts.
+ */
+static uint16_t RGB_StoreChecksum(const RGB_StoreRecord *record)
+{
+  const uint8_t *data = (const uint8_t *)record;
+  uint16_t crc = 0xFFFFU;
+  for (uint32_t i = 0U; i < offsetof(RGB_StoreRecord, checksum); i++)
+  {
+    crc ^= (uint16_t)((uint16_t)data[i] << 8);
+    for (uint8_t bit = 0U; bit < 8U; bit++)
+      crc = (crc & 0x8000U) ? (uint16_t)((crc << 1) ^ 0x1021U)
+                             : (uint16_t)(crc << 1);
+  }
+  return crc;
+}
+
+static uint8_t RGB_StoreIsValid(const RGB_StoreRecord *record)
+{
+  if ((record->magic != RGB_STORE_MAGIC) ||
+      (record->committed != RGB_STORE_COMMITTED) ||
+      (record->mode > 4U) ||
+      (record->speed < 1U) ||
+      (record->speed > 10U) ||
+      (record->reserved0 != 0U) ||
+      (record->reserved1 != 0U))
+    return 0U;
+  return (record->checksum == RGB_StoreChecksum(record)) ? 1U : 0U;
+}
+
+static void RGB_StoreLoad(void)
+{
+  const RGB_StoreRecord *a = (const RGB_StoreRecord *)RGB_STORE_PAGE_A;
+  const RGB_StoreRecord *b = (const RGB_StoreRecord *)RGB_STORE_PAGE_B;
+  const uint8_t valid_a = RGB_StoreIsValid(a);
+  const uint8_t valid_b = RGB_StoreIsValid(b);
+  const RGB_StoreRecord *chosen = NULL;
+
+  if (valid_a && valid_b)
+  {
+    /* Signed difference handles sequence wrap; saves cannot jump 2^31. */
+    g_rgb_saved_slot = ((int32_t)(b->sequence - a->sequence) > 0) ? 1U : 0U;
+    chosen = (g_rgb_saved_slot == 0U) ? a : b;
+  }
+  else if (valid_a)
+  {
+    g_rgb_saved_slot = 0U;
+    chosen = a;
+  }
+  else if (valid_b)
+  {
+    g_rgb_saved_slot = 1U;
+    chosen = b;
+  }
+
+  if (chosen != NULL)
+  {
+    memcpy(&g_rgb_saved_record, chosen, sizeof(g_rgb_saved_record));
+    g_rgb_saved_valid = 1U;
+    g_rgb_mode = chosen->mode;
+    g_rgb_red = chosen->red;
+    g_rgb_green = chosen->green;
+    g_rgb_blue = chosen->blue;
+    g_rgb_brightness = chosen->brightness;
+    g_rgb_speed = chosen->speed;
+  }
+}
+
+static uint8_t RGB_StoreMatchesCurrent(void)
+{
+  return (g_rgb_saved_valid &&
+          g_rgb_saved_record.mode == g_rgb_mode &&
+          g_rgb_saved_record.red == g_rgb_red &&
+          g_rgb_saved_record.green == g_rgb_green &&
+          g_rgb_saved_record.blue == g_rgb_blue &&
+          g_rgb_saved_record.brightness == g_rgb_brightness &&
+          g_rgb_saved_record.speed == g_rgb_speed) ? 1U : 0U;
+}
+
+static uint8_t RGB_StoreSave(void)
+{
+  /* Diagnostic LEDs and USB logs are intentionally not persisted. */
+  if (g_rgb_test_mode != 0U) return 0U;
+  if (RGB_StoreMatchesCurrent() != 0U) return 1U; /* Avoid Flash wear. */
+
+  RGB_StoreRecord next = {0};
+  next.magic = RGB_STORE_MAGIC;
+  next.sequence = g_rgb_saved_valid ? (g_rgb_saved_record.sequence + 1U) : 1U;
+  next.mode = g_rgb_mode;
+  next.red = g_rgb_red;
+  next.green = g_rgb_green;
+  next.blue = g_rgb_blue;
+  next.brightness = g_rgb_brightness;
+  next.speed = g_rgb_speed;
+  next.checksum = RGB_StoreChecksum(&next);
+  next.committed = RGB_STORE_COMMITTED;
+
+  /* Never erase the page containing the most recently committed record. */
+  const uint8_t next_slot = g_rgb_saved_valid ?
+    (uint8_t)(1U - g_rgb_saved_slot) : 0U;
+  const uint32_t address = next_slot ? RGB_STORE_PAGE_B : RGB_STORE_PAGE_A;
+  FLASH_EraseInitTypeDef erase = {0};
+  uint32_t page_error = 0xFFFFFFFFUL;
+  uint8_t ok = 1U;
+
+  erase.TypeErase = FLASH_TYPEERASE_PAGES;
+  erase.PageAddress = address;
+  erase.NbPages = 1U;
+  if (HAL_FLASH_Unlock() != HAL_OK) return 0U;
+
+  if (HAL_FLASHEx_Erase(&erase, &page_error) != HAL_OK)
+  {
+    ok = 0U;
+  }
+  else
+  {
+    /* F103 Flash writes are halfword-sized. Commit marker MUST be last.
+     * All other fields and the checksum are programmed before this marker.
+     */
+    const uint8_t *bytes = (const uint8_t *)&next;
+    for (uint32_t offset = 0U;
+         offset < offsetof(RGB_StoreRecord, committed); offset += 2U)
+    {
+      uint16_t halfword = (uint16_t)bytes[offset] |
+                          (uint16_t)((uint16_t)bytes[offset + 1U] << 8);
+      if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
+                            address + offset, halfword) != HAL_OK)
+      {
+        ok = 0U;
+        break;
+      }
+    }
+    if (ok != 0U &&
+        HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
+                          address + offsetof(RGB_StoreRecord, committed),
+                          next.committed) != HAL_OK)
+      ok = 0U;
+  }
+  (void)HAL_FLASH_Lock();
+
+  /* Verify actual Flash contents before acknowledging success to the PC. */
+  if ((ok == 0U) ||
+      (RGB_StoreIsValid((const RGB_StoreRecord *)address) == 0U))
+    return 0U;
+
+  memcpy(&g_rgb_saved_record, (const void *)address, sizeof(g_rgb_saved_record));
+  g_rgb_saved_slot = next_slot;
+  g_rgb_saved_valid = 1U;
+  return 1U;
+}
+
+static void WebHID_Service(void)
+{
+  uint8_t command[WEBHID_PACKET_SIZE];
+
+  if ((g_webhid_reply_pending == 0U) &&
+      (USBD_HID_WebhidRead(&hUsbDeviceFS, command) != 0U))
+  {
+    uint8_t ok = 1U;
+    memset(g_webhid_reply, 0, WEBHID_PACKET_SIZE);
+    g_webhid_reply[0] = 0x82U; /* ACK */
+    g_webhid_reply[1] = command[0];
+
+    switch (command[0])
+    {
+      case 0x01U: /* GET_STATE */
+        g_webhid_reply[0] = 0x81U;
+        g_webhid_reply[1] = 3U; /* Protocol version */
+        g_webhid_reply[2] = g_rgb_mode;
+        g_webhid_reply[3] = g_rgb_brightness;
+        g_webhid_reply[4] = g_rgb_red;
+        g_webhid_reply[5] = g_rgb_green;
+        g_webhid_reply[6] = g_rgb_blue;
+        g_webhid_reply[7] = g_rgb_speed;
+        g_webhid_reply[8] = g_webhid_log_on;
+        g_webhid_reply[9] = g_mcp_found_count;
+        g_webhid_reply[10] = MCP23008_COUNT;
+        g_webhid_reply[11] = KEY_COUNT;
+        g_webhid_reply[12] = LED6028_COUNT;
+        g_webhid_reply[13] = g_rgb_test_mode;
+        g_webhid_reply[14] = g_rgb_test_index;
+        g_webhid_reply[15] = g_rgb_test_red;
+        g_webhid_reply[16] = g_rgb_test_green;
+        g_webhid_reply[17] = g_rgb_test_blue;
+        g_webhid_reply[18] = g_rgb_saved_valid;
+        g_webhid_reply[19] = RGB_StoreMatchesCurrent();
+        break;
+      case 0x02U:
+        if (command[1] <= 4U)
+        {
+          g_rgb_test_mode = 0U;
+          g_rgb_mode = command[1];
+        }
+        else ok = 0U;
+        break;
+      case 0x03U:
+        g_rgb_test_mode = 0U;
+        g_rgb_red = command[1];
+        g_rgb_green = command[2];
+        g_rgb_blue = command[3];
+        break;
+      case 0x04U:
+        g_rgb_test_mode = 0U;
+        g_rgb_brightness = command[1];
+        break;
+      case 0x05U:
+        if ((command[1] >= 1U) && (command[1] <= 10U))
+        {
+          g_rgb_test_mode = 0U;
+          g_rgb_speed = command[1];
+        }
+        else ok = 0U;
+        break;
+      case 0x06U:
+        if (command[1] <= 1U)
+        {
+          g_webhid_log_on = command[1];
+          if (g_webhid_log_on == 0U)
+            g_webhid_log_head = g_webhid_log_tail = 0U;
+        }
+        else ok = 0U;
+        break;
+      case 0x07U: /* RGB diagnostic: test physical chain, not key->LED map. */
+        if ((command[1] <= 2U) &&
+            ((command[1] != 1U) || (command[2] < LED6028_COUNT)))
+        {
+          g_rgb_test_mode = command[1];
+          g_rgb_test_index = command[2];
+          /* Keep all-board tests at deliberately conservative brightness. */
+          g_rgb_test_red   = (command[3] > 64U) ? 64U : command[3];
+          g_rgb_test_green = (command[4] > 64U) ? 64U : command[4];
+          g_rgb_test_blue  = (command[5] > 64U) ? 64U : command[5];
+        }
+        else ok = 0U;
+        break;
+      case 0x08U: /* SAVE current RGB mode/color/brightness/speed to Flash */
+        ok = RGB_StoreSave();
+        break;
+      default:
+        ok = 0U;
+        break;
+    }
+
+    if (g_webhid_reply[0] == 0x82U)
+      g_webhid_reply[2] = ok;
+    g_webhid_reply_pending = 1U;
+  }
+
+  /* Replies outrank logs, so sliders remain responsive with verbose logging. */
+  if (g_webhid_reply_pending != 0U)
+  {
+    if (USBD_HID_WebhidSend(&hUsbDeviceFS, g_webhid_reply) != 0U)
+      g_webhid_reply_pending = 0U;
+  }
+  else if (g_webhid_log_head != g_webhid_log_tail)
+  {
+    if (USBD_HID_WebhidSend(&hUsbDeviceFS, g_webhid_log_queue[g_webhid_log_tail]) != 0U)
+      g_webhid_log_tail = (uint8_t)((g_webhid_log_tail + 1U) % WEBHID_LOG_QUEUE_SIZE);
+  }
+}
+
 int _write(int file, char *ptr, int len)
 {
   (void)file;
   if ((ptr == NULL) || (len <= 0)) return 0;
   if (HAL_UART_Transmit(&huart1, (uint8_t *)ptr, (uint16_t)len, HAL_MAX_DELAY) != HAL_OK) return -1;
+  WebHID_QueueLog(ptr, len);
   return len;
 }
 
@@ -923,33 +1371,127 @@ static void LED6028_Show(void)
   DelayUs(LED6028_RESET_US);
 }
 
-static void Keyboard_UpdateLEDs(uint8_t breath_level)
+/* Standard RGB color wheel: 0..255 -> red/green/blue. */
+static void LED6028_ColorWheel(uint8_t hue, uint8_t *red, uint8_t *green, uint8_t *blue)
 {
-  uint8_t r = (uint8_t)(((uint16_t)LED6028_BG_R_MAX * breath_level) / LED6028_BREATH_MAX);
-  uint8_t g = (uint8_t)(((uint16_t)LED6028_BG_G_MAX * breath_level) / LED6028_BREATH_MAX);
-  uint8_t b = (uint8_t)(((uint16_t)LED6028_BG_B_MAX * breath_level) / LED6028_BREATH_MAX);
-
-  LED6028_SetAll(r, g, b);
-  for (uint8_t i = 0U; i < KEY_COUNT; i++)
+  if (hue < 85U)
   {
-    if ((g_key_state[i] != 0U) && (g_keymap[i].led != LED_NONE))
-      LED6028_SetPixel(g_keymap[i].led, LED6028_PRESSED_LEVEL, LED6028_PRESSED_LEVEL, LED6028_PRESSED_LEVEL);
+    *red = (uint8_t)(255U - hue * 3U);
+    *green = (uint8_t)(hue * 3U);
+    *blue = 0U;
+  }
+  else if (hue < 170U)
+  {
+    hue = (uint8_t)(hue - 85U);
+    *red = 0U;
+    *green = (uint8_t)(255U - hue * 3U);
+    *blue = (uint8_t)(hue * 3U);
+  }
+  else
+  {
+    hue = (uint8_t)(hue - 170U);
+    *red = (uint8_t)(hue * 3U);
+    *green = 0U;
+    *blue = (uint8_t)(255U - hue * 3U);
+  }
+}
+
+static void Keyboard_UpdateLEDs(uint32_t now)
+{
+  /* Diagnostics bypass both RGB animation and press highlights, so the
+   * selected physical address is always the ONLY illuminated LED.
+   */
+  if (g_rgb_test_mode != 0U)
+  {
+    if (g_rgb_test_mode == 1U)
+    {
+      LED6028_SetAll(0U, 0U, 0U);
+      LED6028_SetPixel(g_rgb_test_index,
+                       g_rgb_test_red, g_rgb_test_green, g_rgb_test_blue);
+    }
+    else
+    {
+      LED6028_SetAll(g_rgb_test_red, g_rgb_test_green, g_rgb_test_blue);
+    }
+    LED6028_Show();
+    return;
+  }
+
+  uint8_t scale = g_rgb_brightness;
+  uint8_t red, green, blue;
+
+  if (g_rgb_mode == 0U)
+    scale = 0U;
+  else if (g_rgb_mode == 1U)
+  {
+    uint32_t period = (LED6028_BREATH_PERIOD_MS * 5U) / g_rgb_speed;
+    float phase = (float)(now % period) / (float)period;
+    float breath = 0.5f - 0.5f * cosf(2.0f * 3.1415926f * phase);
+    scale = (uint8_t)((float)scale * breath);
+  }
+
+  if ((g_rgb_mode == 3U) || (g_rgb_mode == 4U)) /* Spatial rainbow */
+  {
+    /* A pattern hue = position + phase travels toward smaller coordinates.
+     * Use position - phase so mode 3 travels LEFT->RIGHT and mode 4
+     * travels TOP->BOTTOM, regardless of the physical PCB wiring order.
+     * Division before multiplication avoids 32-bit now*speed overflow.
+     */
+    const uint8_t phase = (uint8_t)((now / 80U) * g_rgb_speed);
+    for (uint8_t i = 0U; i < LED6028_COUNT; i++)
+    {
+      uint8_t hue;
+      if (i < LED6028_SPATIAL_COUNT)
+      {
+        const LED6028_Position *pos = &g_led6028_xy[i];
+        /* One coherent wavelength across the keyboard's visible width/
+         * height. No discontinuity at the four PCB boundaries.
+         */
+        hue = (g_rgb_mode == 3U)
+          ? (uint8_t)(((uint16_t)pos->x * 256U) / LED6028_SPATIAL_X_PERIOD - phase)
+          : (uint8_t)(((uint16_t)pos->y * 256U) / LED6028_SPATIAL_Y_PERIOD - phase);
+      }
+      else
+      {
+        /* Unmapped extra LEDs (numpad or future expansion): leave working
+         * with the previous wire-index rainbow until their physical layout
+         * is verified in hardware.
+         */
+        hue = (uint8_t)(((uint32_t)i * 256U / LED6028_COUNT) + phase);
+      }
+      LED6028_ColorWheel(hue, &red, &green, &blue);
+      LED6028_SetPixel(i, (uint8_t)(((uint16_t)red * scale) / 255U),
+                         (uint8_t)(((uint16_t)green * scale) / 255U),
+                         (uint8_t)(((uint16_t)blue * scale) / 255U));
+    }
+  }
+  else /* Off, breathing or solid */
+  {
+    red = (uint8_t)(((uint16_t)g_rgb_red * scale) / 255U);
+    green = (uint8_t)(((uint16_t)g_rgb_green * scale) / 255U);
+    blue = (uint8_t)(((uint16_t)g_rgb_blue * scale) / 255U);
+    LED6028_SetAll(red, green, blue);
+  }
+
+  /* Preserve the ten existing direction-board press highlights. */
+  if (g_rgb_mode != 0U)
+  {
+    for (uint8_t i = 0U; i < KEY_COUNT; i++)
+    {
+      if ((g_key_state[i] != 0U) && (g_keymap[i].led != LED_NONE))
+        LED6028_SetPixel(g_keymap[i].led, LED6028_PRESSED_LEVEL,
+                        LED6028_PRESSED_LEVEL, LED6028_PRESSED_LEVEL);
+    }
   }
   LED6028_Show();
 }
 
-static void LED6028_BreathService(uint32_t ms)
+static void LED6028_BreathService(uint32_t now)
 {
   static uint32_t last_update = 0U;
-  float phase, breath;
-  uint32_t level;
-
-  if ((uint32_t)(ms - last_update) < LED6028_BREATH_UPDATE_MS) return;
-  last_update = ms;
-  phase = (float)(ms % LED6028_BREATH_PERIOD_MS) / (float)LED6028_BREATH_PERIOD_MS;
-  breath = 0.5f - 0.5f * cosf(2.0f * 3.1415926f * phase);
-  level = (uint32_t)((float)LED6028_BREATH_RANGE * breath);
-  Keyboard_UpdateLEDs((uint8_t)(LED6028_BREATH_MIN + level));
+  if ((uint32_t)(now - last_update) < LED6028_BREATH_UPDATE_MS) return;
+  last_update = now;
+  Keyboard_UpdateLEDs(now);
 }
 /* USER CODE END 0 */
 
@@ -965,6 +1507,13 @@ int main(void)
   SystemClock_Config();
   MX_GPIO_Init();
   MX_USART1_UART_Init();
+  RGB_StoreLoad();  /* Restore saved RGB settings before any LED update. */
+  /* R14 is a fixed 1.5k pull-up from PA12 (HID_DP) to 3.3V. A firmware
+   * reboot / ST-Link flash does not remove that pull-up, so Windows may
+   * retain the previous USB connection. Generate a real D+ low interval
+   * before starting the USB peripheral, without resetting other GPIOs.
+   */
+  USB_ForceReenumeration();
   MX_USB_DEVICE_Init();
 
   CycleCounter_Init();
@@ -1002,6 +1551,7 @@ int main(void)
     }
 
     Keyboard_USBService();
+    WebHID_Service();
     LED6028_BreathService(now);
 
     if ((uint32_t)(now - last_mcp_poll_tick) >= MCP23008_POLL_PERIOD_MS)
@@ -1079,6 +1629,37 @@ static void MX_USART1_UART_Init(void)
   huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
   if (HAL_UART_Init(&huart1) != HAL_OK) Error_Handler();
+}
+
+/* STM32F103 USB Full Speed: PA12 = D+.
+ * Direction-board schematic: R14 (1.5k) connects HID_DP to VCC3V3.
+ * Since the pull-up is always powered, an MCU reset / SWD programming
+ * sequence need not produce a physical USB detach.  Override the pull-up
+ * with PA12 push-pull LOW for 150ms (~2.2mA through R14), release it,
+ * and immediately let STM32Cube take ownership of USB pins.
+ *
+ * Only call before MX_USB_DEVICE_Init(); NEVER while the USB peripheral
+ * is active.  This does not depend on browser state or RGB mode.
+ */
+static void USB_ForceReenumeration(void)
+{
+  GPIO_InitTypeDef gpio = {0};
+
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_12, GPIO_PIN_RESET);
+  gpio.Pin = GPIO_PIN_12;
+  gpio.Mode = GPIO_MODE_OUTPUT_PP;
+  gpio.Pull = GPIO_NOPULL;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &gpio);
+
+  /* Let the host/hub observe a stable USB detach, even on SWD reset. */
+  HAL_Delay(150U);
+
+  /* Return PA12 to its reset/default configuration. The hardware 1.5k
+   * pull-up restores D+ HIGH; MX_USB_DEVICE_Init() starts the USB IP.
+   */
+  HAL_GPIO_DeInit(GPIOA, GPIO_PIN_12);
 }
 
 static void MX_GPIO_Init(void)

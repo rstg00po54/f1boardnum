@@ -56,7 +56,12 @@ ENTRY(Reset_Handler)
 MEMORY
 {
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 20K
-FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 64K
+/* Reserve two 1KB erase pages for resilient RGB configuration persistence.
+ * Slot A = 0x0800F800..0x0800FBFF, slot B = 0x0800FC00..0x0800FFFF.
+ * Application code and initialized data are limited to the first 62KB.
+ */
+FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 62K
+RGB_SETTINGS (r): ORIGIN = 0x800F800, LENGTH = 2K
 }
 
 /* Highest address of the user mode stack */

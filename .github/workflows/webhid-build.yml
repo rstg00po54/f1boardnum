@@ -1,0 +1,42 @@
+name: STM32F103 WebHID build
+on:
+  push:
+    branches: [webhid_rgb_console]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate browser WebHID JavaScript
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, subprocess
+          html = Path("web/index.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script(?:\\s[^>]*)?>(.*?)</script>", html, re.S)
+          assert len(scripts) == 1, "Expected one inline console script"
+          js = Path("/tmp/multipad_webhid_check.js")
+          js.write_text(scripts[0], encoding="utf-8")
+          subprocess.run(["node", "--check", str(js)], check=True)
+          print("Browser WebHID script syntax OK")
+          PY
+      - name: Install ARM toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi ninja-build cmake
+      - name: Configure
+        run: cmake --preset Release
+      - name: Compile firmware
+        run: cmake --build --preset Release -j 2
+      - name: Show Flash and RAM usage
+        run: arm-none-eabi-size build/Release/f1board.elf
+      - name: Package firmware
+        run: arm-none-eabi-objcopy -O binary build/Release/f1board.elf build/Release/f1board.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f1board-webhid-firmware
+          path: |
+            build/Release/f1board.bin
+            build/Release/f1board.elf
+          retention-days: 14
