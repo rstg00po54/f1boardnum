@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <stddef.h>
 #include "usbd_hid.h"
 /* USER CODE END Includes */
 
@@ -403,6 +404,40 @@ static uint8_t g_rgb_test_index = 0U;
 static uint8_t g_rgb_test_red = 48U;
 static uint8_t g_rgb_test_green = 0U;
 static uint8_t g_rgb_test_blue = 0U;
+/* Persistent RGB configuration for STM32F103C8 (64KB, 1KB erase pages).
+ * Linked firmware ends before 0x0800F800. Use two alternating pages so
+ * power loss during an update leaves the previously valid record intact.
+ * No automatic writes while moving a slider; only explicit SAVE (0x08).
+ */
+#define RGB_STORE_PAGE_A        0x0800F800UL
+#define RGB_STORE_PAGE_B        0x0800FC00UL
+#define RGB_STORE_MAGIC         0x4D505247UL  /* "MPRG" */
+#define RGB_STORE_COMMITTED     0xA55AU
+
+typedef struct
+{
+  uint32_t magic;
+  uint32_t sequence;
+  uint8_t mode;
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+  uint8_t brightness;
+  uint8_t speed;
+  uint8_t reserved0;
+  uint8_t reserved1;
+  uint16_t checksum;
+  uint16_t committed;  /* Program LAST to make partial writes invalid */
+} RGB_StoreRecord;
+
+_Static_assert(sizeof(RGB_StoreRecord) == 20U, "RGB flash record must be 20 bytes");
+_Static_assert(offsetof(RGB_StoreRecord, checksum) == 16U, "Bad RGB record checksum offset");
+_Static_assert(offsetof(RGB_StoreRecord, committed) == 18U, "Bad RGB record commit offset");
+
+static RGB_StoreRecord g_rgb_saved_record;
+static uint8_t g_rgb_saved_valid = 0U;
+static uint8_t g_rgb_saved_slot = 0U;  /* 0=A, 1=B. Meaningful only if valid. */
+
 static uint8_t g_webhid_log_on = 0U;
 static uint8_t g_webhid_reply[WEBHID_PACKET_SIZE];
 static uint8_t g_webhid_reply_pending = 0U;
@@ -434,6 +469,9 @@ static void Keyboard_BuildReport(void);
 static void Keyboard_USBService(void);
 static void WebHID_Service(void);
 static void WebHID_QueueLog(const char *text, int len);
+static void RGB_StoreLoad(void);
+static uint8_t RGB_StoreSave(void);
+static uint8_t RGB_StoreMatchesCurrent(void);
 static void USB_ForceReenumeration(void);
 static void Keyboard_UpdateLEDs(uint32_t now);
 static void LED6028_Init(void);
@@ -474,6 +512,157 @@ static void WebHID_QueueLog(const char *message, int len)
  * Diagnostic 07: [07, mode(0/1/2), index(0..99), R, G, B, ...].
  * Keyboard->PC: 81 state, 82 command ACK, 80 text log.
  */
+/* CRC-16/CCITT-FALSE over exactly the first 16 bytes, independent of
+ * any padding. Read-only validation runs on every boot, before USB starts.
+ */
+static uint16_t RGB_StoreChecksum(const RGB_StoreRecord *record)
+{
+  const uint8_t *data = (const uint8_t *)record;
+  uint16_t crc = 0xFFFFU;
+  for (uint32_t i = 0U; i < offsetof(RGB_StoreRecord, checksum); i++)
+  {
+    crc ^= (uint16_t)((uint16_t)data[i] << 8);
+    for (uint8_t bit = 0U; bit < 8U; bit++)
+      crc = (crc & 0x8000U) ? (uint16_t)((crc << 1) ^ 0x1021U)
+                             : (uint16_t)(crc << 1);
+  }
+  return crc;
+}
+
+static uint8_t RGB_StoreIsValid(const RGB_StoreRecord *record)
+{
+  if ((record->magic != RGB_STORE_MAGIC) ||
+      (record->committed != RGB_STORE_COMMITTED) ||
+      (record->mode > 4U) ||
+      (record->speed < 1U) ||
+      (record->speed > 10U) ||
+      (record->reserved0 != 0U) ||
+      (record->reserved1 != 0U))
+    return 0U;
+  return (record->checksum == RGB_StoreChecksum(record)) ? 1U : 0U;
+}
+
+static void RGB_StoreLoad(void)
+{
+  const RGB_StoreRecord *a = (const RGB_StoreRecord *)RGB_STORE_PAGE_A;
+  const RGB_StoreRecord *b = (const RGB_StoreRecord *)RGB_STORE_PAGE_B;
+  const uint8_t valid_a = RGB_StoreIsValid(a);
+  const uint8_t valid_b = RGB_StoreIsValid(b);
+  const RGB_StoreRecord *chosen = NULL;
+
+  if (valid_a && valid_b)
+  {
+    /* Signed difference handles sequence wrap; saves cannot jump 2^31. */
+    g_rgb_saved_slot = ((int32_t)(b->sequence - a->sequence) > 0) ? 1U : 0U;
+    chosen = (g_rgb_saved_slot == 0U) ? a : b;
+  }
+  else if (valid_a)
+  {
+    g_rgb_saved_slot = 0U;
+    chosen = a;
+  }
+  else if (valid_b)
+  {
+    g_rgb_saved_slot = 1U;
+    chosen = b;
+  }
+
+  if (chosen != NULL)
+  {
+    memcpy(&g_rgb_saved_record, chosen, sizeof(g_rgb_saved_record));
+    g_rgb_saved_valid = 1U;
+    g_rgb_mode = chosen->mode;
+    g_rgb_red = chosen->red;
+    g_rgb_green = chosen->green;
+    g_rgb_blue = chosen->blue;
+    g_rgb_brightness = chosen->brightness;
+    g_rgb_speed = chosen->speed;
+  }
+}
+
+static uint8_t RGB_StoreMatchesCurrent(void)
+{
+  return (g_rgb_saved_valid &&
+          g_rgb_saved_record.mode == g_rgb_mode &&
+          g_rgb_saved_record.red == g_rgb_red &&
+          g_rgb_saved_record.green == g_rgb_green &&
+          g_rgb_saved_record.blue == g_rgb_blue &&
+          g_rgb_saved_record.brightness == g_rgb_brightness &&
+          g_rgb_saved_record.speed == g_rgb_speed) ? 1U : 0U;
+}
+
+static uint8_t RGB_StoreSave(void)
+{
+  /* Diagnostic LEDs and USB logs are intentionally not persisted. */
+  if (g_rgb_test_mode != 0U) return 0U;
+  if (RGB_StoreMatchesCurrent() != 0U) return 1U; /* Avoid Flash wear. */
+
+  RGB_StoreRecord next = {0};
+  next.magic = RGB_STORE_MAGIC;
+  next.sequence = g_rgb_saved_valid ? (g_rgb_saved_record.sequence + 1U) : 1U;
+  next.mode = g_rgb_mode;
+  next.red = g_rgb_red;
+  next.green = g_rgb_green;
+  next.blue = g_rgb_blue;
+  next.brightness = g_rgb_brightness;
+  next.speed = g_rgb_speed;
+  next.checksum = RGB_StoreChecksum(&next);
+  next.committed = RGB_STORE_COMMITTED;
+
+  /* Never erase the page containing the most recently committed record. */
+  const uint8_t next_slot = g_rgb_saved_valid ?
+    (uint8_t)(1U - g_rgb_saved_slot) : 0U;
+  const uint32_t address = next_slot ? RGB_STORE_PAGE_B : RGB_STORE_PAGE_A;
+  FLASH_EraseInitTypeDef erase = {0};
+  uint32_t page_error = 0xFFFFFFFFUL;
+  uint8_t ok = 1U;
+
+  erase.TypeErase = FLASH_TYPEERASE_PAGES;
+  erase.PageAddress = address;
+  erase.NbPages = 1U;
+  if (HAL_FLASH_Unlock() != HAL_OK) return 0U;
+
+  if (HAL_FLASHEx_Erase(&erase, &page_error) != HAL_OK)
+  {
+    ok = 0U;
+  }
+  else
+  {
+    /* F103 Flash writes are halfword-sized. Commit marker MUST be last.
+     * All other fields and the checksum are programmed before this marker.
+     */
+    const uint8_t *bytes = (const uint8_t *)&next;
+    for (uint32_t offset = 0U;
+         offset < offsetof(RGB_StoreRecord, committed); offset += 2U)
+    {
+      uint16_t halfword = (uint16_t)bytes[offset] |
+                          (uint16_t)((uint16_t)bytes[offset + 1U] << 8);
+      if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
+                            address + offset, halfword) != HAL_OK)
+      {
+        ok = 0U;
+        break;
+      }
+    }
+    if (ok != 0U &&
+        HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD,
+                          address + offsetof(RGB_StoreRecord, committed),
+                          next.committed) != HAL_OK)
+      ok = 0U;
+  }
+  (void)HAL_FLASH_Lock();
+
+  /* Verify actual Flash contents before acknowledging success to the PC. */
+  if ((ok == 0U) ||
+      (RGB_StoreIsValid((const RGB_StoreRecord *)address) == 0U))
+    return 0U;
+
+  memcpy(&g_rgb_saved_record, (const void *)address, sizeof(g_rgb_saved_record));
+  g_rgb_saved_slot = next_slot;
+  g_rgb_saved_valid = 1U;
+  return 1U;
+}
+
 static void WebHID_Service(void)
 {
   uint8_t command[WEBHID_PACKET_SIZE];
@@ -490,7 +679,7 @@ static void WebHID_Service(void)
     {
       case 0x01U: /* GET_STATE */
         g_webhid_reply[0] = 0x81U;
-        g_webhid_reply[1] = 2U; /* Protocol version */
+        g_webhid_reply[1] = 3U; /* Protocol version */
         g_webhid_reply[2] = g_rgb_mode;
         g_webhid_reply[3] = g_rgb_brightness;
         g_webhid_reply[4] = g_rgb_red;
@@ -507,6 +696,8 @@ static void WebHID_Service(void)
         g_webhid_reply[15] = g_rgb_test_red;
         g_webhid_reply[16] = g_rgb_test_green;
         g_webhid_reply[17] = g_rgb_test_blue;
+        g_webhid_reply[18] = g_rgb_saved_valid;
+        g_webhid_reply[19] = RGB_StoreMatchesCurrent();
         break;
       case 0x02U:
         if (command[1] <= 4U)
@@ -555,6 +746,9 @@ static void WebHID_Service(void)
           g_rgb_test_blue  = (command[5] > 64U) ? 64U : command[5];
         }
         else ok = 0U;
+        break;
+      case 0x08U: /* SAVE current RGB mode/color/brightness/speed to Flash */
+        ok = RGB_StoreSave();
         break;
       default:
         ok = 0U;
@@ -1313,6 +1507,7 @@ int main(void)
   SystemClock_Config();
   MX_GPIO_Init();
   MX_USART1_UART_Init();
+  RGB_StoreLoad();  /* Restore saved RGB settings before any LED update. */
   /* R14 is a fixed 1.5k pull-up from PA12 (HID_DP) to 3.3V. A firmware
    * reboot / ST-Link flash does not remove that pull-up, so Windows may
    * retain the previous USB connection. Generate a real D+ low interval
