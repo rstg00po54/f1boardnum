@@ -547,9 +547,7 @@ ApplicationWindow {
                                 checked: backend.loggingEnabled
                                 enabled: backend.connected &&
                                     (backend.selectedDevice === 0 || backend.logControlSupported)
-                                onToggled: {
-                                    if (pressed) backend.setLogging(checked)
-                                }
+                                onClicked: backend.setLogging(checked)
                             }
                             Item { Layout.fillWidth: true }
                             ActionButton {
