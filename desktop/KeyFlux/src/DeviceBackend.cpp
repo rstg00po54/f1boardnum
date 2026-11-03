@@ -3,7 +3,7 @@
 #include <QElapsedTimer>
 #include <QMutexLocker>
 #include <QtMath>
-#include <hidapi/hidapi.h>
+#include <hidapi.h>
 
 #include <algorithm>
 #include <array>
