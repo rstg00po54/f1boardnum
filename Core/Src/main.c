@@ -303,6 +303,15 @@ static uint8_t g_rgb_green = 32U;
 static uint8_t g_rgb_blue = 50U;
 static uint8_t g_rgb_brightness = 180U;
 static uint8_t g_rgb_speed = 5U;
+/* Temporary LED diagnostic mode, independent of the 5 PCB physical layouts.
+ * 0=normal, 1=one LED at index, 2=all LEDs in one low-power test color.
+ * Deliberately never persisted to flash.
+ */
+static uint8_t g_rgb_test_mode = 0U;
+static uint8_t g_rgb_test_index = 0U;
+static uint8_t g_rgb_test_red = 48U;
+static uint8_t g_rgb_test_green = 0U;
+static uint8_t g_rgb_test_blue = 0U;
 static uint8_t g_webhid_log_on = 0U;
 static uint8_t g_webhid_reply[WEBHID_PACKET_SIZE];
 static uint8_t g_webhid_reply_pending = 0U;
@@ -369,7 +378,8 @@ static void WebHID_QueueLog(const char *message, int len)
 
 /* WebHID application-level protocol, always 32 bytes:
  * PC->keyboard: 01 status, 02 mode, 03 RGB, 04 brightness,
- *               05 speed, 06 log on/off.
+ *               05 speed, 06 log on/off, 07 LED diagnostic mode/index/RGB.
+ * Diagnostic 07: [07, mode(0/1/2), index(0..99), R, G, B, ...].
  * Keyboard->PC: 81 state, 82 command ACK, 80 text log.
  */
 static void WebHID_Service(void)
@@ -388,7 +398,7 @@ static void WebHID_Service(void)
     {
       case 0x01U: /* GET_STATE */
         g_webhid_reply[0] = 0x81U;
-        g_webhid_reply[1] = 1U; /* Protocol version */
+        g_webhid_reply[1] = 2U; /* Protocol version */
         g_webhid_reply[2] = g_rgb_mode;
         g_webhid_reply[3] = g_rgb_brightness;
         g_webhid_reply[4] = g_rgb_red;
@@ -400,21 +410,36 @@ static void WebHID_Service(void)
         g_webhid_reply[10] = MCP23008_COUNT;
         g_webhid_reply[11] = KEY_COUNT;
         g_webhid_reply[12] = LED6028_COUNT;
+        g_webhid_reply[13] = g_rgb_test_mode;
+        g_webhid_reply[14] = g_rgb_test_index;
+        g_webhid_reply[15] = g_rgb_test_red;
+        g_webhid_reply[16] = g_rgb_test_green;
+        g_webhid_reply[17] = g_rgb_test_blue;
         break;
       case 0x02U:
-        if (command[1] <= 3U) g_rgb_mode = command[1]; else ok = 0U;
+        if (command[1] <= 3U)
+        {
+          g_rgb_test_mode = 0U;
+          g_rgb_mode = command[1];
+        }
+        else ok = 0U;
         break;
       case 0x03U:
+        g_rgb_test_mode = 0U;
         g_rgb_red = command[1];
         g_rgb_green = command[2];
         g_rgb_blue = command[3];
         break;
       case 0x04U:
+        g_rgb_test_mode = 0U;
         g_rgb_brightness = command[1];
         break;
       case 0x05U:
         if ((command[1] >= 1U) && (command[1] <= 10U))
+        {
+          g_rgb_test_mode = 0U;
           g_rgb_speed = command[1];
+        }
         else ok = 0U;
         break;
       case 0x06U:
@@ -423,6 +448,19 @@ static void WebHID_Service(void)
           g_webhid_log_on = command[1];
           if (g_webhid_log_on == 0U)
             g_webhid_log_head = g_webhid_log_tail = 0U;
+        }
+        else ok = 0U;
+        break;
+      case 0x07U: /* RGB diagnostic: test physical chain, not key->LED map. */
+        if ((command[1] <= 2U) &&
+            ((command[1] != 1U) || (command[2] < LED6028_COUNT)))
+        {
+          g_rgb_test_mode = command[1];
+          g_rgb_test_index = command[2];
+          /* Keep all-board tests at deliberately conservative brightness. */
+          g_rgb_test_red   = (command[3] > 64U) ? 64U : command[3];
+          g_rgb_test_green = (command[4] > 64U) ? 64U : command[4];
+          g_rgb_test_blue  = (command[5] > 64U) ? 64U : command[5];
         }
         else ok = 0U;
         break;
@@ -1074,6 +1112,25 @@ static void LED6028_ColorWheel(uint8_t hue, uint8_t *red, uint8_t *green, uint8_
 
 static void Keyboard_UpdateLEDs(uint32_t now)
 {
+  /* Diagnostics bypass both RGB animation and press highlights, so the
+   * selected physical address is always the ONLY illuminated LED.
+   */
+  if (g_rgb_test_mode != 0U)
+  {
+    if (g_rgb_test_mode == 1U)
+    {
+      LED6028_SetAll(0U, 0U, 0U);
+      LED6028_SetPixel(g_rgb_test_index,
+                       g_rgb_test_red, g_rgb_test_green, g_rgb_test_blue);
+    }
+    else
+    {
+      LED6028_SetAll(g_rgb_test_red, g_rgb_test_green, g_rgb_test_blue);
+    }
+    LED6028_Show();
+    return;
+  }
+
   uint8_t scale = g_rgb_brightness;
   uint8_t red, green, blue;
 
