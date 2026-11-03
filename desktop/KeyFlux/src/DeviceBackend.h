@@ -55,6 +55,14 @@ class DeviceBackend final : public QObject
     Q_PROPERTY(bool saved READ saved NOTIFY stateChanged)
     Q_PROPERTY(bool logControlSupported READ logControlSupported NOTIFY stateChanged)
     Q_PROPERTY(bool loggingEnabled READ loggingEnabled NOTIFY stateChanged)
+    Q_PROPERTY(bool metricsAvailable READ metricsAvailable NOTIFY stateChanged)
+    Q_PROPERTY(int usbPollingHz READ usbPollingHz NOTIFY stateChanged)
+    Q_PROPERTY(int scanHz READ scanHz NOTIFY stateChanged)
+    Q_PROPERTY(int scanAvgUs READ scanAvgUs NOTIFY stateChanged)
+    Q_PROPERTY(int scanMaxUs READ scanMaxUs NOTIFY stateChanged)
+    Q_PROPERTY(int hidReportHz READ hidReportHz NOTIFY stateChanged)
+    Q_PROPERTY(int cpuActivePermille READ cpuActivePermille NOTIFY stateChanged)
+    Q_PROPERTY(int metricsWindowMs READ metricsWindowMs NOTIFY stateChanged)
 public:
     explicit DeviceBackend(QObject *parent = nullptr);
     ~DeviceBackend() override;
@@ -73,6 +81,14 @@ public:
     bool saved() const { return m_selected == 0 && m_multiSaved; }
     bool logControlSupported() const { return m_selected == 1 && m_keychronLogSupported; }
     bool loggingEnabled() const { return m_logging[m_selected]; }
+    bool metricsAvailable() const { return m_selected == 0 && m_metrics.available; }
+    int usbPollingHz() const { return m_metrics.usbPollHz; }
+    int scanHz() const { return m_metrics.scanHz; }
+    int scanAvgUs() const { return m_metrics.scanAvgUs; }
+    int scanMaxUs() const { return m_metrics.scanMaxUs; }
+    int hidReportHz() const { return m_metrics.hidReportHz; }
+    int cpuActivePermille() const { return m_metrics.cpuActivePermille; }
+    int metricsWindowMs() const { return m_metrics.windowMs; }
 
     void setSelectedDevice(int index);
     Q_INVOKABLE void refresh();
@@ -98,6 +114,17 @@ private:
         QString color = QStringLiteral("#802032");
     };
 
+    struct Metrics {
+        bool available = false;
+        int usbPollHz = 0;
+        int scanHz = 0;
+        int scanAvgUs = 0;
+        int scanMaxUs = 0;
+        int hidReportHz = 0;
+        int cpuActivePermille = 0;
+        int windowMs = 0;
+    };
+
     void send(int kind, const QByteArray &data);
     void received(int kind, const QByteArray &data);
     void log(const QString &line);
@@ -116,5 +143,6 @@ private:
     int m_selected = 0;
     bool m_multiSaved = false;
     bool m_keychronLogSupported = false;
+    Metrics m_metrics;
     QString m_logs;
 };

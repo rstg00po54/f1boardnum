@@ -25,6 +25,11 @@ UART_HandleTypeDef huart1;
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
 #define KEY_SCAN_PERIOD_MS             2U
+#define METRICS_SAMPLE_PERIOD_MS      1000U
+/* Experimental faster software I2C: ~3us/bit plus GPIO turnaround
+ * rather than the previous ~6us/bit, within MCP23008 Fast-mode capability.
+ * Keep original firmware in main for recovery if long wiring is marginal. */
+#define SOFT_I2C_HALF_PERIOD_US           1U
 #define KEY_DEBOUNCE_COUNT             1U
 /* Hold physical Fn (0x21 R2/C3) + Backspace (0x21 R3/C0)
  * for three seconds to reboot. The combo cannot be triggered by USB.
@@ -444,6 +449,26 @@ static uint8_t g_webhid_reply_pending = 0U;
 static uint8_t g_webhid_log_queue[WEBHID_LOG_QUEUE_SIZE][WEBHID_PACKET_SIZE];
 static uint8_t g_webhid_log_head = 0U;
 static uint8_t g_webhid_log_tail = 0U;
+
+/* DWT CYCCNT is already enabled for software I2C. WFI idle is excluded
+ * from the active time estimate (interrupts during WFI may be undercounted). */
+typedef struct
+{
+  uint16_t scan_hz;
+  uint16_t scan_avg_us;
+  uint16_t scan_max_us;
+  uint16_t hid_reports_hz;
+  uint16_t active_permille;
+  uint16_t window_ms;
+  uint8_t ready;
+} KeyboardMetrics;
+
+static KeyboardMetrics g_metrics;
+static uint32_t g_metrics_scan_count;
+static uint64_t g_metrics_scan_cycles;
+static uint32_t g_metrics_max_scan_cycles;
+static uint32_t g_metrics_report_count;
+static uint64_t g_metrics_busy_cycles;
 /* USER CODE END PV */
 
 void SystemClock_Config(void);
@@ -452,8 +477,11 @@ static void MX_USART1_UART_Init(void);
 
 /* USER CODE BEGIN PFP */
 static void CycleCounter_Init(void);
+static void Metrics_FinishWindow(uint32_t elapsed_ms);
+static void Metrics_PackReply(uint8_t reply[WEBHID_PACKET_SIZE]);
 static void DelayUs(uint32_t us);
 static void SoftI2C_Init(void);
+static uint8_t MCP23008_ColumnRead(uint8_t addr7, uint8_t outputs, uint8_t *gpio);
 static uint8_t SoftI2C_Probe(uint8_t addr7);
 static void MCP23008_ScanBus(void);
 static uint8_t SoftI2C_WriteReg(uint8_t addr7, uint8_t reg, uint8_t value);
@@ -663,6 +691,57 @@ static uint8_t RGB_StoreSave(void)
   return 1U;
 }
 
+static void Metrics_FinishWindow(uint32_t elapsed_ms)
+{
+  const uint32_t cycles_per_us = SystemCoreClock / 1000000U;
+  const uint64_t expected_cycles = (uint64_t)SystemCoreClock * elapsed_ms / 1000U;
+  uint64_t permille = expected_cycles == 0U ? 0U :
+                       (g_metrics_busy_cycles * 1000U + expected_cycles / 2U) / expected_cycles;
+  if (permille > 1000U) permille = 1000U;
+
+  uint32_t rate = elapsed_ms ? (g_metrics_scan_count * 1000U) / elapsed_ms : 0U;
+  g_metrics.scan_hz = rate > 65535U ? 65535U : (uint16_t)rate;
+  uint32_t report_rate = elapsed_ms ? (g_metrics_report_count * 1000U) / elapsed_ms : 0U;
+  g_metrics.hid_reports_hz = report_rate > 65535U ? 65535U : (uint16_t)report_rate;
+  uint64_t avg_us = (g_metrics_scan_count != 0U && cycles_per_us != 0U) ?
+                     g_metrics_scan_cycles / (g_metrics_scan_count * (uint64_t)cycles_per_us) : 0U;
+  g_metrics.scan_avg_us = avg_us > 65535U ? 65535U : (uint16_t)avg_us;
+  uint32_t max_us = cycles_per_us ? g_metrics_max_scan_cycles / cycles_per_us : 0U;
+  g_metrics.scan_max_us = max_us > 65535U ? 65535U : (uint16_t)max_us;
+  g_metrics.active_permille = (uint16_t)permille;
+  g_metrics.window_ms = elapsed_ms > 65535U ? 65535U : (uint16_t)elapsed_ms;
+  g_metrics.ready = 1U;
+
+  g_metrics_scan_count = 0U;
+  g_metrics_scan_cycles = 0U;
+  g_metrics_max_scan_cycles = 0U;
+  g_metrics_report_count = 0U;
+  g_metrics_busy_cycles = 0U;
+}
+
+/* Protocol extension: GET_METRICS 0x09 replies 0x83 with 32 bytes.
+ * [1]=format v1; [2]=USB FS bInterval (ms);
+ * little-endian 16-bit [3]=scanHz, [5]=avgScanUs, [7]=maxScanUs,
+ * [9]=HID reports submitted/s, [11]=active CPU permille,
+ * [13]=sample window ms; [15]=valid snapshot.
+ * Reports/s != host polling Hz; endpoints poll even without key events. */
+static void Metrics_PackReply(uint8_t reply[WEBHID_PACKET_SIZE])
+{
+  reply[0] = 0x83U;
+  reply[1] = 1U;
+  reply[2] = HID_FS_BINTERVAL;
+  const uint16_t values[6] = {
+    g_metrics.scan_hz, g_metrics.scan_avg_us, g_metrics.scan_max_us,
+    g_metrics.hid_reports_hz, g_metrics.active_permille, g_metrics.window_ms
+  };
+  for (uint8_t i = 0U; i < 6U; ++i)
+  {
+    reply[3U + 2U * i] = (uint8_t)(values[i] & 0xFFU);
+    reply[4U + 2U * i] = (uint8_t)(values[i] >> 8U);
+  }
+  reply[15] = g_metrics.ready;
+}
+
 static void WebHID_Service(void)
 {
   uint8_t command[WEBHID_PACKET_SIZE];
@@ -749,6 +828,9 @@ static void WebHID_Service(void)
         break;
       case 0x08U: /* SAVE current RGB mode/color/brightness/speed to Flash */
         ok = RGB_StoreSave();
+        break;
+      case 0x09U: /* GET_METRICS: read-only snapshot */
+        Metrics_PackReply(g_webhid_reply);
         break;
       default:
         ok = 0U;
@@ -843,7 +925,7 @@ static void SoftI2C_WaitSCLHigh(void)
 
 static void SoftI2C_Delay(void)
 {
-  DelayUs(2U);
+  DelayUs(SOFT_I2C_HALF_PERIOD_US);
 }
 
 static void SoftI2C_Start(void)
@@ -993,19 +1075,55 @@ static uint8_t SoftI2C_ReadReg(uint8_t addr7, uint8_t reg, uint8_t *value)
   return ok;
 }
 
+/* Fast matrix transaction: one address selection, a GPIO write,
+ * REPEATED START, GPIO read. IOCON.SEQOP=1 is required to keep the
+ * address pointer at GPIO (0x09) after writing GPIO.
+ * Writing GPIO updates OLAT for output bits GP4..GP7, while reading
+ * GPIO samples the live row pins GP0..GP3.
+ * The 5us settle time after column latch is retained. */
+static uint8_t MCP23008_ColumnRead(uint8_t addr7, uint8_t outputs, uint8_t *gpio)
+{
+  if (gpio == NULL) return 0U;
+
+  SoftI2C_Start();
+  const uint8_t cmd_ok =
+       SoftI2C_WriteByte((uint8_t)(addr7 << 1U)) &&
+       SoftI2C_WriteByte(MCP23008_REG_GPIO) &&
+       SoftI2C_WriteByte(outputs);
+  if (cmd_ok == 0U)
+  {
+    SoftI2C_Stop();
+    return 0U;
+  }
+
+  DelayUs(5U);
+  SoftI2C_Start();
+  if (SoftI2C_WriteByte((uint8_t)((addr7 << 1U) | 1U)) == 0U)
+  {
+    SoftI2C_Stop();
+    return 0U;
+  }
+  *gpio = SoftI2C_ReadByte(0U);
+  SoftI2C_Stop();
+  return 1U;
+}
+
 static uint8_t MCP23008_Config(uint8_t addr)
 {
-  uint8_t iodir = 0U, gppu = 0U;
+  uint8_t iodir = 0U, gppu = 0U, iocon = 0U;
   if (SoftI2C_Probe(addr) == 0U) return 0U;
   if (SoftI2C_WriteReg(addr, MCP23008_REG_IODIR, 0x0FU) == 0U) return 0U;
   if (SoftI2C_WriteReg(addr, MCP23008_REG_IPOL, 0x00U) == 0U) return 0U;
   if (SoftI2C_WriteReg(addr, MCP23008_REG_GPINTEN, 0x00U) == 0U) return 0U;
-  if (SoftI2C_WriteReg(addr, MCP23008_REG_IOCON, 0x00U) == 0U) return 0U;
+  /* Byte mode keeps pointer at GPIO for back-to-back write/read. */
+  if (SoftI2C_WriteReg(addr, MCP23008_REG_IOCON, 0x20U) == 0U) return 0U;
   if (SoftI2C_WriteReg(addr, MCP23008_REG_GPPU, 0x0FU) == 0U) return 0U;
   if (SoftI2C_WriteReg(addr, MCP23008_REG_OLAT, 0xF0U) == 0U) return 0U;
   if (SoftI2C_ReadReg(addr, MCP23008_REG_IODIR, &iodir) == 0U) return 0U;
   if (SoftI2C_ReadReg(addr, MCP23008_REG_GPPU, &gppu) == 0U) return 0U;
-  return ((iodir == 0x0FU) && ((gppu & 0x0FU) == 0x0FU)) ? 1U : 0U;
+  if (SoftI2C_ReadReg(addr, MCP23008_REG_IOCON, &iocon) == 0U) return 0U;
+  return ((iodir == 0x0FU) && ((gppu & 0x0FU) == 0x0FU) &&
+          ((iocon & 0x20U) != 0U)) ? 1U : 0U;
 }
 
 /* Recalculate actual online devices, including failures during key scanning.
@@ -1204,14 +1322,7 @@ static void Keyboard_Scan(void)
       uint8_t col_bit = (uint8_t)(7U - col);
       uint8_t outputs = (uint8_t)(MCP_COL_OUT_MASK & (uint8_t)~(1U << col_bit));
 
-      if (SoftI2C_WriteReg(addr, MCP23008_REG_OLAT, outputs) == 0U)
-      {
-        g_mcp_ready[dev] = 0U;
-        break;
-      }
-
-      DelayUs(5U);
-      if (SoftI2C_ReadReg(addr, MCP23008_REG_GPIO, &gpio) == 0U)
+      if (MCP23008_ColumnRead(addr, outputs, &gpio) == 0U)
       {
         g_mcp_ready[dev] = 0U;
         break;
@@ -1300,7 +1411,11 @@ static void Keyboard_USBService(void)
 {
   if (g_report_pending == 0U) return;
   if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED) return;
-  if (USBD_HID_SendReport(&hUsbDeviceFS, g_hid_report, sizeof(g_hid_report)) == USBD_OK) g_report_pending = 0U;
+  if (USBD_HID_SendReport(&hUsbDeviceFS, g_hid_report, sizeof(g_hid_report)) == USBD_OK)
+  {
+    g_report_pending = 0U;
+    ++g_metrics_report_count; /* HID IN transfer submitted, not completed. */
+  }
 }
 
 static __attribute__((always_inline)) inline void LED6028_DIN_High(void)
@@ -1501,6 +1616,7 @@ int main(void)
   uint32_t last_log_tick = 0U;
   uint32_t last_mcp_retry_tick = 0U;
   uint32_t last_mcp_poll_tick = 0U;
+  uint32_t last_metrics_tick = 0U;
   int frame = 0;
 
   HAL_Init();
@@ -1538,15 +1654,23 @@ int main(void)
   printf("RGB              : PB6 GPIO bit-bang, %u LEDs\r\n", (unsigned int)LED6028_COUNT);
   printf("========================================\r\n");
 
+  last_metrics_tick = HAL_GetTick();
   while (1)
   {
+    const uint32_t active_start = DWT->CYCCNT;
     uint32_t now = HAL_GetTick();
     frame++;
 
     if ((uint32_t)(now - last_scan_tick) >= KEY_SCAN_PERIOD_MS)
     {
       last_scan_tick = now;
+      const uint32_t scan_start = DWT->CYCCNT;
       Keyboard_Scan();
+      const uint32_t scan_cycles = DWT->CYCCNT - scan_start;
+      ++g_metrics_scan_count;
+      g_metrics_scan_cycles += scan_cycles;
+      if (scan_cycles > g_metrics_max_scan_cycles)
+        g_metrics_max_scan_cycles = scan_cycles;
       Keyboard_RebootShortcut(now);
     }
 
@@ -1588,6 +1712,18 @@ int main(void)
       }
       printf(" frame=%d\r\n", frame);
     }
+
+    /* Count foreground CPU cycles and let Cortex-M3 idle until the next
+     * SysTick/USB interrupt. No clock frequency or USB timers are changed. */
+    g_metrics_busy_cycles += (uint32_t)(DWT->CYCCNT - active_start);
+    const uint32_t metrics_now = HAL_GetTick();
+    const uint32_t sample_ms = metrics_now - last_metrics_tick;
+    if (sample_ms >= METRICS_SAMPLE_PERIOD_MS)
+    {
+      Metrics_FinishWindow(sample_ms);
+      last_metrics_tick = metrics_now;
+    }
+    __WFI();
   }
 }
 

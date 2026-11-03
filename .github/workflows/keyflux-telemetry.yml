@@ -1,0 +1,40 @@
+name: KeyFlux STM32 Telemetry Firmware
+
+on:
+  push:
+    branches: [keyflux_telemetry]
+    paths:
+      - "Core/**"
+      - "Middlewares/**"
+      - ".github/workflows/keyflux-telemetry.yml"
+  pull_request:
+    branches: [keyflux_qt]
+    paths:
+      - "Core/**"
+      - "Middlewares/**"
+      - ".github/workflows/keyflux-telemetry.yml"
+  workflow_dispatch:
+
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM cross compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi cmake ninja-build
+      - name: Configure STM32 project
+        run: cmake --preset Release
+      - name: Build STM32 firmware
+        run: cmake --build --preset Release -j 2
+      - name: Binary and size
+        run: |
+          arm-none-eabi-size build/Release/f1board.elf
+          arm-none-eabi-objcopy -O binary build/Release/f1board.elf build/Release/f1board.bin
+      - name: Upload telemetry firmware for hardware testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: f1board-keyflux-telemetry-firmware
+          path: |
+            build/Release/f1board.elf
+            build/Release/f1board.bin
+          retention-days: 14
