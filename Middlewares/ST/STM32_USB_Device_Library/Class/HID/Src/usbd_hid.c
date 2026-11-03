@@ -425,9 +425,15 @@ __ALIGN_BEGIN static uint8_t WEBHID_ReportDesc[WEBHID_REPORT_DESC_SIZE] __ALIGN_
   */
 static uint8_t  USBD_HID_Init(USBD_HandleTypeDef *pdev, uint8_t cfgidx)
 {
-  /* Open EP IN */
   USBD_LL_OpenEP(pdev, HID_EPIN_ADDR, USBD_EP_TYPE_INTR, HID_EPIN_SIZE);
   pdev->ep_in[HID_EPIN_ADDR & 0xFU].is_used = 1U;
+  USBD_LL_OpenEP(pdev, WEBHID_EPIN_ADDR, USBD_EP_TYPE_INTR, WEBHID_PACKET_SIZE);
+  USBD_LL_OpenEP(pdev, WEBHID_EPOUT_ADDR, USBD_EP_TYPE_INTR, WEBHID_PACKET_SIZE);
+  pdev->ep_in[WEBHID_EPIN_ADDR & 0xFU].is_used = 1U;
+  pdev->ep_out[WEBHID_EPOUT_ADDR & 0xFU].is_used = 1U;
+  webhid_rx_pending = 0U;
+  webhid_tx_busy = 0U;
+  (void)USBD_LL_PrepareReceive(pdev, WEBHID_EPOUT_ADDR, webhid_rx, WEBHID_PACKET_SIZE);
 
   pdev->pClassData = USBD_malloc(sizeof(USBD_HID_HandleTypeDef));
 
@@ -453,7 +459,13 @@ static uint8_t  USBD_HID_DeInit(USBD_HandleTypeDef *pdev,
 {
   /* Close HID EPs */
   USBD_LL_CloseEP(pdev, HID_EPIN_ADDR);
+  USBD_LL_CloseEP(pdev, WEBHID_EPIN_ADDR);
+  USBD_LL_CloseEP(pdev, WEBHID_EPOUT_ADDR);
   pdev->ep_in[HID_EPIN_ADDR & 0xFU].is_used = 0U;
+  pdev->ep_in[WEBHID_EPIN_ADDR & 0xFU].is_used = 0U;
+  pdev->ep_out[WEBHID_EPOUT_ADDR & 0xFU].is_used = 0U;
+  webhid_rx_pending = 0U;
+  webhid_tx_busy = 0U;
 
   /* FRee allocated memory */
   if (pdev->pClassData != NULL)
@@ -526,12 +538,20 @@ static uint8_t  USBD_HID_Setup(USBD_HandleTypeDef *pdev,
         case USB_REQ_GET_DESCRIPTOR:
           if (req->wValue >> 8 == HID_REPORT_DESC)
           {
-            len = MIN(HID_MOUSE_REPORT_DESC_SIZE, req->wLength);
-            pbuf = HID_MOUSE_ReportDesc;
+            if ((req->wIndex & 0xFFU) == 1U)
+            {
+              len = MIN(WEBHID_REPORT_DESC_SIZE, req->wLength);
+              pbuf = WEBHID_ReportDesc;
+            }
+            else
+            {
+              len = MIN(HID_MOUSE_REPORT_DESC_SIZE, req->wLength);
+              pbuf = HID_MOUSE_ReportDesc;
+            }
           }
           else if (req->wValue >> 8 == HID_DESCRIPTOR_TYPE)
           {
-            pbuf = USBD_HID_Desc;
+            pbuf = ((req->wIndex & 0xFFU) == 1U) ? USBD_WEBHID_Desc : USBD_HID_Desc;
             len = MIN(USB_HID_DESC_SIZ, req->wLength);
           }
           else
@@ -684,14 +704,47 @@ static uint8_t  *USBD_HID_GetOtherSpeedCfgDesc(uint16_t *length)
   * @param  epnum: endpoint index
   * @retval status
   */
-static uint8_t  USBD_HID_DataIn(USBD_HandleTypeDef *pdev,
-                                uint8_t epnum)
+static uint8_t USBD_HID_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum)
 {
-
-  /* Ensure that the FIFO is empty before a new transfer, this condition could
-  be caused by  a new transfer before the end of the previous transfer */
-  ((USBD_HID_HandleTypeDef *)pdev->pClassData)->state = HID_IDLE;
+  if (epnum == (WEBHID_EPIN_ADDR & 0x7FU))
+    webhid_tx_busy = 0U;
+  else if (epnum == (HID_EPIN_ADDR & 0x7FU))
+    ((USBD_HID_HandleTypeDef *)pdev->pClassData)->state = HID_IDLE;
   return USBD_OK;
+}
+
+static uint8_t USBD_HID_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum)
+{
+  (void)pdev;
+  if (epnum == (WEBHID_EPOUT_ADDR & 0x7FU))
+    webhid_rx_pending = 1U;
+  return USBD_OK;
+}
+
+uint8_t USBD_HID_WebhidRead(USBD_HandleTypeDef *pdev, uint8_t data[WEBHID_PACKET_SIZE])
+{
+  if ((pdev->dev_state != USBD_STATE_CONFIGURED) || (webhid_rx_pending == 0U))
+    return 0U;
+
+  memcpy(data, webhid_rx, WEBHID_PACKET_SIZE);
+  webhid_rx_pending = 0U;
+  (void)USBD_LL_PrepareReceive(pdev, WEBHID_EPOUT_ADDR, webhid_rx, WEBHID_PACKET_SIZE);
+  return 1U;
+}
+
+uint8_t USBD_HID_WebhidSend(USBD_HandleTypeDef *pdev, const uint8_t data[WEBHID_PACKET_SIZE])
+{
+  if ((pdev->dev_state != USBD_STATE_CONFIGURED) || (webhid_tx_busy != 0U))
+    return 0U;
+
+  memcpy(webhid_tx, data, WEBHID_PACKET_SIZE);
+  webhid_tx_busy = 1U;
+  if (USBD_LL_Transmit(pdev, WEBHID_EPIN_ADDR, webhid_tx, WEBHID_PACKET_SIZE) != USBD_OK)
+  {
+    webhid_tx_busy = 0U;
+    return 0U;
+  }
+  return 1U;
 }
 
 
