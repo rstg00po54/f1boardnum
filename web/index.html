@@ -18,10 +18,20 @@ select{width:100%;background:#0e1625;border:1px solid var(--line);padding:12px;c
 input[type="range"]{width:100%;accent-color:var(--accent)}input[type="color"]{width:100%;height:43px;background:transparent;border:1px solid var(--line);border-radius:10px;padding:4px}
 .stat{border:1px solid var(--line);border-radius:12px;padding:14px;flex:1;min-width:125px}.stat strong{font-size:24px;display:block}.stat span{font-size:13px;color:var(--muted)}
 #log{height:290px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#080d18;border:1px solid var(--line);border-radius:11px;padding:15px;font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;color:#c7e3d4}
+.test-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
+.test-grid .control{margin:8px 0}
+.test-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:13px 0}
+.test-actions button{padding:9px 14px}
+.test-index{font-size:24px;font-weight:750;font-variant-numeric:tabular-nums}
+.test-state{color:#9fc8ff;font-size:13px}
+.note{padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#0b1426;color:var(--muted);font-size:13px;line-height:1.65}
+.board-record{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding-top:8px}
+.board-record select{width:auto}
+#boardMarks{color:#a0acc5;white-space:pre-wrap;font-size:12px}
 .status{display:inline-flex;align-items:center;gap:8px;font-size:14px;color:var(--muted)}.status::before{content:"";width:9px;height:9px;background:#de8c82;border-radius:100%}
 .status.live::before{background:#58cfaa}.toolbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap}input[type="checkbox"]{accent-color:#7ba7ff;width:17px;height:17px;vertical-align:middle}
 footer{color:var(--muted);font-size:13px;line-height:1.75;margin-top:22px}
-@media(max-width:680px){.grid{grid-template-columns:1fr}.card.full{grid-column:auto}.card{padding:19px}}
+@media(max-width:680px){.grid,.test-grid{grid-template-columns:1fr}.card.full{grid-column:auto}.card{padding:19px}}
 </style>
 </head>
 <body>
@@ -46,6 +56,33 @@ footer{color:var(--muted);font-size:13px;line-height:1.75;margin-top:22px}
     <p class="muted">固件保留 Fn + Backspace 长按 3 秒的软件重启。重启后需要重新连接。</p>
   </div>
   <div class="card full">
+    <div class="row"><h2>RGB 灯珠定位 / 5 块 PCB 排查</h2><span id="testStatus" class="test-state">等待连接</span></div>
+    <div class="note">逐灯测试严格按照 LED 数据链地址 <strong>0–99</strong> 点亮，不依赖键位映射。先看每颗灯落在哪块 PCB、沿什么方向排列；再用全灯纯红 / 绿 / 蓝检查 5 块板是否有颜色通道不一致。</div>
+    <div class="test-grid">
+      <div class="control"><label for="testType">测试方式</label><select id="testType" disabled><option value="1">单颗 LED 定位</option><option value="2">全部 LED 颜色检查</option></select></div>
+      <div class="control"><label for="testColor">测试颜色（低亮度）</label><select id="testColor" disabled><option value="red">纯红</option><option value="green">纯绿</option><option value="blue">纯蓝</option><option value="white">低亮度白色</option></select></div>
+    </div>
+    <div class="control">
+      <label for="testIndex">LED 数据链编号 <span id="testIndexText" class="test-index">0 / 99</span></label>
+      <input type="range" id="testIndex" min="0" max="99" value="0" step="1" disabled>
+    </div>
+    <div class="test-actions">
+      <button id="testStart" disabled>开始测试</button>
+      <button id="testPrev" class="secondary" disabled>上一颗</button>
+      <button id="testNext" class="secondary" disabled>下一颗</button>
+      <button id="testAuto" class="secondary" disabled>自动巡检</button>
+      <button id="testStop" class="secondary" disabled>结束测试 / 恢复灯效</button>
+    </div>
+    <div class="board-record">
+      <span class="muted">记录每块 PCB 的首颗 LED：</span>
+      <select id="testBoard" disabled><option value="0">板 1</option><option value="1">板 2</option><option value="2">板 3</option><option value="3">板 4</option><option value="4">板 5</option></select>
+      <button id="markStart" class="secondary" disabled>记录当前编号</button>
+      <button id="copyMarks" class="secondary">复制记录</button>
+      <span id="boardMarks">板 1: ?　板 2: ?　板 3: ?　板 4: ?　板 5: ?</span>
+    </div>
+    <p class="muted"><small>提示：不同板的 LED 数量暂时未知，不预设每板 20 颗；测试模式不保存到 Flash。若供电不充足，请优先用单灯模式。</small></p>
+  </div>
+  <div class="card full">
     <div class="row"><h2>USB HID 实时日志</h2><div class="toolbar"><label><input id="logging" type="checkbox" disabled> 开启日志传输</label><button id="clear" class="secondary">清空</button><button id="save" class="secondary">保存日志</button></div></div>
     <pre id="log" aria-live="polite">按“连接键盘”，在浏览器的设备授权窗口中选择 MultiPad。</pre>
     <small>来自固件 printf()，包含 I²C 扫描、按键矩阵和系统状态。浏览器接收速度不足时可能丢弃部分日志。</small>
@@ -65,12 +102,31 @@ let sendQueue = Promise.resolve();
 let logText = '';
 const decoder = new TextDecoder();
 const controls = ['mode','color','brightness','speed','logging','refresh'];
+const diagnosticControls = ['testType','testColor','testIndex','testPrev','testNext','testStart','testStop','testAuto','testBoard','markStart'];
+const diagnosticColors = {red:[48,0,0], green:[0,48,0], blue:[0,0,48], white:[12,12,12]};
+let diagnosticSupported = false, testActive = false, testLedCount = 100;
+let autoTimer = null, autoPending = false;
+let boardStarts = [null,null,null,null,null];
+function updateDiagnosticControls() {
+  const enabled = !!(device && device.opened && diagnosticSupported);
+  for (const id of diagnosticControls) $(id).disabled = !enabled;
+  for (const id of ['testIndex','testPrev','testNext','testAuto'])
+    $(id).disabled = !enabled || $('testType').value !== '1';
+  $('testAuto').textContent = autoTimer ? '暂停巡检' : '自动巡检';
+}
 function connected(yes) {
   $('connection').className = 'status' + (yes ? ' live' : '');
   $('connection').textContent = yes ? 'USB 已连接' : '未连接';
   $('connect').disabled = yes;
   $('disconnect').disabled = !yes;
   for (const id of controls) $(id).disabled = !yes;
+  if (!yes) {
+    stopAuto();
+    diagnosticSupported = false;
+    testActive = false;
+    $('testStatus').textContent = '等待连接';
+  }
+  updateDiagnosticControls();
 }
 function appendLog(t) {
   logText += t;
@@ -97,6 +153,24 @@ function handleReport(event) {
     $('mcp').textContent = String(buf[9]) + '/' + String(buf[10]);
     $('keys').textContent = String(buf[11]);
     $('leds').textContent = String(buf[12]);
+    testLedCount = buf[12] || 100;
+    $('testIndex').max = String(testLedCount - 1);
+    if (Number($('testIndex').value) >= testLedCount) $('testIndex').value = String(testLedCount - 1);
+    diagnosticSupported = buf[1] >= 2;
+    if (diagnosticSupported) {
+      testActive = buf[13] !== 0;
+      if (testActive) {
+        $('testType').value = String(buf[13]);
+        $('testIndex').value = String(buf[14]);
+        const color = Object.keys(diagnosticColors).find(k => diagnosticColors[k].every((v,i) => v === buf[15+i]));
+        if (color) $('testColor').value = color;
+      }
+      $('testStatus').textContent = testActive ? '测试模式已开启' : '就绪 · 固件支持测试';
+      updateIndexText();
+    } else {
+      $('testStatus').textContent = '当前固件不支持 RGB 测试，请更新固件';
+    }
+    updateDiagnosticControls();
   }
   if (pending && ((buf[0] === 0x81 && pending.command === 1) ||
       (buf[0] === 0x82 && pending.command === buf[1]))) {
@@ -140,18 +214,98 @@ async function disconnect() {
   if(device && device.opened) await device.close();
   device=null;connected(false);appendLog('\n[WEB] 已断开\n');
 }
+function updateIndexText() {
+  $('testIndexText').textContent = $('testIndex').value + ' / ' + (testLedCount - 1);
+}
+function stopAuto() {
+  if (autoTimer !== null) clearInterval(autoTimer);
+  autoTimer = null;
+  autoPending = false;
+  if ($('testAuto')) $('testAuto').textContent = '自动巡检';
+}
+function leaveTestUi() {
+  stopAuto();
+  testActive = false;
+  $('testStatus').textContent = '正常灯效模式';
+}
+async function applyTest() {
+  if (!diagnosticSupported || !device || !device.opened) return;
+  const kind = Number($('testType').value);
+  const index = Number($('testIndex').value);
+  const rgb = diagnosticColors[$('testColor').value];
+  await enqueue(0x07,[kind,index,...rgb]);
+  testActive = true;
+  $('testStatus').textContent = kind === 1 ? ('正在定位 LED ' + index) : '全灯颜色测试中';
+}
+async function stopTest() {
+  stopAuto();
+  if (device && device.opened && diagnosticSupported) {
+    await enqueue(0x07,[0,0,0,0,0]);
+  }
+  leaveTestUi();
+}
+function changeTestIndex(delta) {
+  const next = Math.min(testLedCount - 1, Math.max(0, Number($('testIndex').value) + delta));
+  $('testIndex').value = String(next);
+  updateIndexText();
+  if (testActive) return applyTest();
+  return Promise.resolve();
+}
+function updateBoardMarks() {
+  $('boardMarks').textContent = boardStarts.map((n,i) => '板 ' + (i+1) + ': ' + (n === null ? '?' : n)).join('　');
+}
+$('testStart').addEventListener('click',()=>applyTest().catch(()=>{}));
+$('testStop').addEventListener('click',()=>stopTest().catch(()=>{}));
+$('testType').addEventListener('change',()=>{
+  if ($('testType').value !== '1') stopAuto();
+  updateDiagnosticControls();
+  if (testActive) applyTest().catch(()=>{});
+});
+$('testColor').addEventListener('change',()=>{if(testActive) applyTest().catch(()=>{});});
+$('testIndex').addEventListener('input',updateIndexText);
+$('testIndex').addEventListener('change',()=>{if(testActive) applyTest().catch(()=>{});});
+$('testPrev').addEventListener('click',()=>changeTestIndex(-1).catch(()=>{}));
+$('testNext').addEventListener('click',()=>changeTestIndex(1).catch(()=>{}));
+$('testAuto').addEventListener('click',async()=>{
+  if(autoTimer!==null){stopAuto();updateDiagnosticControls();return;}
+  if ($('testType').value !== '1') $('testType').value = '1';
+  updateDiagnosticControls();
+  try { if(!testActive) await applyTest(); }catch{ return; }
+  autoTimer = setInterval(async()=>{
+    if (autoPending || !device || !device.opened) return;
+    autoPending = true;
+    try {
+      const now = Number($('testIndex').value);
+      $('testIndex').value = String(now + 1 >= testLedCount ? 0 : now + 1);
+      updateIndexText();
+      await applyTest();
+    } catch {stopAuto();} finally {autoPending = false;}
+  },500);
+  updateDiagnosticControls();
+});
+$('markStart').addEventListener('click',()=>{
+  boardStarts[Number($('testBoard').value)] = Number($('testIndex').value);
+  updateBoardMarks();
+});
+$('copyMarks').addEventListener('click',async()=>{
+  const text = 'LED 物理板序记录（按 USB LED 编号）\n' +
+    boardStarts.map((n,i)=>'板 '+(i+1)+' 首颗: '+(n===null?'未知':n)).join('\n');
+  try {await navigator.clipboard.writeText(text);$('testStatus').textContent='已复制板号记录';}
+  catch { $('testStatus').textContent='复制失败，请手动记录：'+text.replaceAll('\n','；'); }
+});
 $('connect').addEventListener('click',connect);
 $('disconnect').addEventListener('click',()=>disconnect().catch(e=>appendLog(e.message)));
 $('refresh').addEventListener('click',()=>enqueue(0x01).catch(()=>{}));
-$('mode').addEventListener('change',e=>enqueue(0x02,[Number(e.target.value)]).catch(()=>{}));
+$('mode').addEventListener('change',e=>{leaveTestUi();enqueue(0x02,[Number(e.target.value)]).catch(()=>{});});
 $('color').addEventListener('change',e=>{
   const h=e.target.value; $('hex').textContent=h;
+  leaveTestUi();
   enqueue(0x03,[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)]).catch(()=>{});
 });
 $('brightness').addEventListener('input',e=>$('brightnessVal').textContent=e.target.value);
-$('brightness').addEventListener('change',e=>enqueue(0x04,[Number(e.target.value)]).catch(()=>{}));
+$('brightness').addEventListener('change',e=>{leaveTestUi();enqueue(0x04,[Number(e.target.value)]).catch(()=>{});});
 $('speed').addEventListener('input',e=>$('speedVal').textContent=e.target.value);
-$('speed').addEventListener('change',e=>enqueue(0x05,[Number(e.target.value)]).catch(()=>{}));
+$('speed').addEventListener('change',e=>{leaveTestUi();enqueue(0x05,[Number(e.target.value)]).catch(()=>{});});
 $('logging').addEventListener('change',e=>enqueue(0x06,[e.target.checked?1:0]).catch(()=>{}));
 $('clear').addEventListener('click',()=>{logText='';$('log').textContent='';});
 $('save').addEventListener('click',()=>{
