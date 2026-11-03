@@ -7,6 +7,7 @@
 STM32F103C8T6 原有 USB Boot Keyboard HID（接口 0、EP 0x81、8 字节）保持不变，新增独立的 **Vendor WebHID**（接口 1、EP 0x82 IN / 0x02 OUT，均 32 字节，Usage Page `0xFF60`、Usage `0x61`）。这不会自动成为 QMK/VIA 设备，只给仓库自带的网页控制台使用。
 
 - 灯效：关闭 / 呼吸 / 常亮 / 彩虹流动。
+- **RGB 排查模式（协议 v2）**：单颗 LED 0–99 定位、500ms 自动巡检、全灯低亮度红/绿/蓝/白、在网页记录五块板的起始 LED 编号。测试不依赖键位映射，不会写入 Flash。
 - 可调节颜色、亮度、速度（**仅在 RAM 生效；断电后恢复默认**）。
 - USB 日志：网页选择「开启日志」之后，将 `printf()` 的 UART1 内容同步排队发送到 USB HID；若浏览器接收速度不足，优先保护按键输入，可能丢弃部分日志。
 - 页面显示 MCP 在线数量、键位数、RGB 灯数。
@@ -17,12 +18,14 @@ STM32F103C8T6 原有 USB Boot Keyboard HID（接口 0、EP 0x81、8 字节）保
 在仓库根目录执行：
 
 ```bash
-git fetch origin && git switch --track origin/webhid_rgb_console
+git fetch github webhid_rgb_console && git switch --track github/webhid_rgb_console
 cmake --preset Release && cmake --build --preset Release -j 2
 arm-none-eabi-objcopy -O binary build/Release/f1board.elf build/Release/f1board.bin
 ```
 
-如果你已经在此分支，直接 `git pull --ff-only`。烧录方式沿用当前的 ST-Link/SWD，**WebHID 不等于 Bootloader，也不增加 USB 刷机能力**。
+这里 `github` 是此项目现有的 GitHub remote，`origin` 指向你自己的 Git 服务器。
+
+如果你已经在此分支，直接 `git pull --ff-only github webhid_rgb_console`。烧录方式沿用当前的 ST-Link/SWD，**WebHID 不等于 Bootloader，也不增加 USB 刷机能力**。
 
 仓库包含 GitHub Actions 交叉编译检查；先确保编译通过，并检查 Flash 不超过 STM32F103C8T6 的 64KB。
 
@@ -56,12 +59,24 @@ http://localhost:8080/web/
 | `0x04` | 设定亮度 | Byte 1: 0-255 |
 | `0x05` | 设定速度 | Byte 1: 1-10 |
 | `0x06` | 开关日志 | Byte 1: 0=关、1=开 |
+| `0x07` | RGB 诊断 | Byte 1: 0=退出、1=单灯、2=全灯；Byte 2: LED 编号；Bytes 3–5: R/G/B（固件钳制为 ≤64） |
 
 **固件回复**：
 
-- `0x81` 状态：`[0x81, version, mode, brightness, red, green, blue, speed, log_enabled, mcp_online, mcp_total, key_count, led_count, ...]`
+- `0x81` 状态：`[0x81, version(2), mode, brightness, red, green, blue, speed, log_enabled, mcp_online, mcp_total, key_count, led_count, test_mode, test_index, test_red, test_green, test_blue, ...]`
 - `0x82` 回执：`[0x82, command, ok, ...]`；`ok=1` 表示参数已接受
 - `0x80` 日志：`[0x80, length (0-30), 30 bytes UTF-8/ASCII payload]`
+
+## 5 块 PCB 的 RGB 测试步骤
+
+1. 刷入本分支的新固件后，刷新网页并重新连接 HID（**仅更新网页无法启用诊断模式**）。
+2. 新增「RGB 灯珠定位 / 5 块 PCB 排查」面板：选择「单颗 LED 定位」和「纯红」，点「开始测试」。此时只有第 0 号灯亮。
+3. 通过「上一颗 / 下一颗」或「自动巡检」走完 0–99。观察 LED 是否按同一块板的物理顺序排列；如果换板时跳跃、反向，记下边界编号。
+4. 选择「全部 LED 颜色检查」，分别测试纯红、绿、蓝（及低亮度白）。如果有整块板颜色不对，优先检查 RGB 通道/灯珠方向、供电与信号。
+5. 用「记录当前编号」标注五块 PCB 各自的首颗 LED，点击「复制记录」发回结果，我们再建立 100 颗灯的物理空间映射。**不假定每块板有 20 颗。**
+6. 点「结束测试 / 恢复灯效」或断电重启退出临时诊断。
+
+> 为避免一次打开 100 颗灯造成电流过大，全灯诊断采用保守颜色亮度，并且固件将每通道限制为 64/255；实际供电情况仍需你检查，确保 LED 电源容量足够。
 
 ## 排查
 
