@@ -1377,7 +1377,11 @@ static void Keyboard_USBService(void)
 {
   if (g_report_pending == 0U) return;
   if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED) return;
-  if (USBD_HID_SendReport(&hUsbDeviceFS, g_hid_report, sizeof(g_hid_report)) == USBD_OK) g_report_pending = 0U;
+  if (USBD_HID_SendReport(&hUsbDeviceFS, g_hid_report, sizeof(g_hid_report)) == USBD_OK)
+  {
+    g_report_pending = 0U;
+    ++g_metrics_report_count; /* HID IN transfer submitted, not completed. */
+  }
 }
 
 static __attribute__((always_inline)) inline void LED6028_DIN_High(void)
@@ -1578,6 +1582,7 @@ int main(void)
   uint32_t last_log_tick = 0U;
   uint32_t last_mcp_retry_tick = 0U;
   uint32_t last_mcp_poll_tick = 0U;
+  uint32_t last_metrics_tick = 0U;
   int frame = 0;
 
   HAL_Init();
@@ -1615,15 +1620,23 @@ int main(void)
   printf("RGB              : PB6 GPIO bit-bang, %u LEDs\r\n", (unsigned int)LED6028_COUNT);
   printf("========================================\r\n");
 
+  last_metrics_tick = HAL_GetTick();
   while (1)
   {
+    const uint32_t active_start = DWT->CYCCNT;
     uint32_t now = HAL_GetTick();
     frame++;
 
     if ((uint32_t)(now - last_scan_tick) >= KEY_SCAN_PERIOD_MS)
     {
       last_scan_tick = now;
+      const uint32_t scan_start = DWT->CYCCNT;
       Keyboard_Scan();
+      const uint32_t scan_cycles = DWT->CYCCNT - scan_start;
+      ++g_metrics_scan_count;
+      g_metrics_scan_cycles += scan_cycles;
+      if (scan_cycles > g_metrics_max_scan_cycles)
+        g_metrics_max_scan_cycles = scan_cycles;
       Keyboard_RebootShortcut(now);
     }
 
@@ -1665,6 +1678,18 @@ int main(void)
       }
       printf(" frame=%d\r\n", frame);
     }
+
+    /* Count foreground CPU cycles and let Cortex-M3 idle until the next
+     * SysTick/USB interrupt. No clock frequency or USB timers are changed. */
+    g_metrics_busy_cycles += (uint32_t)(DWT->CYCCNT - active_start);
+    const uint32_t metrics_now = HAL_GetTick();
+    const uint32_t sample_ms = metrics_now - last_metrics_tick;
+    if (sample_ms >= METRICS_SAMPLE_PERIOD_MS)
+    {
+      Metrics_FinishWindow(sample_ms);
+      last_metrics_tick = metrics_now;
+    }
+    __WFI();
   }
 }
 
