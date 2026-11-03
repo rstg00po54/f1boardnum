@@ -369,7 +369,7 @@ void DeviceBackend::received(int kind, const QByteArray &p)
 
     if (kind == 0) {
         if (op == 0x80 && p.size() > 2) {
-            const int count = std::min(byteAt(p, 1), p.size() - 2);
+            const int count = std::min(byteAt(p, 1), static_cast<int>(p.size()) - 2);
             if (count > 0) log(QString::fromUtf8(p.constData() + 2, count));
             return;
         }
