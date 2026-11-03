@@ -2,13 +2,13 @@ name: KeyFlux STM32 Telemetry Firmware
 
 on:
   push:
-    branches: [keyflux_telemetry]
+    branches: [keyflux_telemetry, keyflux_hw_i2c]
     paths:
       - "Core/**"
       - "Middlewares/**"
       - ".github/workflows/keyflux-telemetry.yml"
   pull_request:
-    branches: [keyflux_qt]
+    branches: [keyflux_qt, keyflux_telemetry]
     paths:
       - "Core/**"
       - "Middlewares/**"
