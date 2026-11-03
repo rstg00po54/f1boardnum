@@ -108,6 +108,13 @@ static uint8_t  *USBD_HID_GetOtherSpeedCfgDesc(uint16_t *length);
 static uint8_t  *USBD_HID_GetDeviceQualifierDesc(uint16_t *length);
 
 static uint8_t  USBD_HID_DataIn(USBD_HandleTypeDef *pdev, uint8_t epnum);
+static uint8_t  USBD_HID_DataOut(USBD_HandleTypeDef *pdev, uint8_t epnum);
+
+/* Separate 32-byte vendor WebHID transport; keyboard report unchanged. */
+static uint8_t webhid_rx[WEBHID_PACKET_SIZE];
+static uint8_t webhid_tx[WEBHID_PACKET_SIZE];
+static volatile uint8_t webhid_rx_pending = 0U;
+static volatile uint8_t webhid_tx_busy = 0U;
 /**
   * @}
   */
@@ -124,7 +131,7 @@ USBD_ClassTypeDef  USBD_HID =
   NULL, /*EP0_TxSent*/
   NULL, /*EP0_RxReady*/
   USBD_HID_DataIn, /*DataIn*/
-  NULL, /*DataOut*/
+  USBD_HID_DataOut, /*DataOut*/
   NULL, /*SOF */
   NULL,
   NULL,
@@ -142,7 +149,7 @@ __ALIGN_BEGIN static uint8_t USBD_HID_CfgFSDesc[USB_HID_CONFIG_DESC_SIZ]  __ALIG
   USB_HID_CONFIG_DESC_SIZ,
   /* wTotalLength: Bytes returned */
   0x00,
-  0x01,         /*bNumInterfaces: 1 interface*/
+  0x02,         /*bNumInterfaces: 2 interfaces*/
   0x01,         /*bConfigurationValue: Configuration value*/
   0x00,         /*iConfiguration: Index of string descriptor describing
   the configuration*/
@@ -182,6 +189,15 @@ __ALIGN_BEGIN static uint8_t USBD_HID_CfgFSDesc[USB_HID_CONFIG_DESC_SIZ]  __ALIG
   0x00,
   HID_FS_BINTERVAL,          /*bInterval: Polling Interval */
   /* 34 */
+  /* Interface 1: vendor WebHID, not a keyboard. */
+  0x09, USB_DESC_TYPE_INTERFACE,
+  0x01, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00,
+  0x09, HID_DESCRIPTOR_TYPE, 0x11, 0x01, 0x00, 0x01,
+  HID_REPORT_DESC, WEBHID_REPORT_DESC_SIZE, 0x00,
+  0x07, USB_DESC_TYPE_ENDPOINT, WEBHID_EPIN_ADDR, 0x03,
+  WEBHID_PACKET_SIZE, 0x00, HID_FS_BINTERVAL,
+  0x07, USB_DESC_TYPE_ENDPOINT, WEBHID_EPOUT_ADDR, 0x03,
+  WEBHID_PACKET_SIZE, 0x00, HID_FS_BINTERVAL,
 };
 
 /* USB HID device HS Configuration Descriptor */
@@ -192,7 +208,7 @@ __ALIGN_BEGIN static uint8_t USBD_HID_CfgHSDesc[USB_HID_CONFIG_DESC_SIZ]  __ALIG
   USB_HID_CONFIG_DESC_SIZ,
   /* wTotalLength: Bytes returned */
   0x00,
-  0x01,         /*bNumInterfaces: 1 interface*/
+  0x02,         /*bNumInterfaces: 2 interfaces*/
   0x01,         /*bConfigurationValue: Configuration value*/
   0x00,         /*iConfiguration: Index of string descriptor describing
   the configuration*/
@@ -232,6 +248,15 @@ __ALIGN_BEGIN static uint8_t USBD_HID_CfgHSDesc[USB_HID_CONFIG_DESC_SIZ]  __ALIG
   0x00,
   HID_HS_BINTERVAL,          /*bInterval: Polling Interval */
   /* 34 */
+  /* Interface 1: vendor WebHID, not a keyboard. */
+  0x09, USB_DESC_TYPE_INTERFACE,
+  0x01, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00,
+  0x09, HID_DESCRIPTOR_TYPE, 0x11, 0x01, 0x00, 0x01,
+  HID_REPORT_DESC, WEBHID_REPORT_DESC_SIZE, 0x00,
+  0x07, USB_DESC_TYPE_ENDPOINT, WEBHID_EPIN_ADDR, 0x03,
+  WEBHID_PACKET_SIZE, 0x00, HID_FS_BINTERVAL,
+  0x07, USB_DESC_TYPE_ENDPOINT, WEBHID_EPOUT_ADDR, 0x03,
+  WEBHID_PACKET_SIZE, 0x00, HID_FS_BINTERVAL,
 };
 
 /* USB HID device Other Speed Configuration Descriptor */
@@ -242,7 +267,7 @@ __ALIGN_BEGIN static uint8_t USBD_HID_OtherSpeedCfgDesc[USB_HID_CONFIG_DESC_SIZ]
   USB_HID_CONFIG_DESC_SIZ,
   /* wTotalLength: Bytes returned */
   0x00,
-  0x01,         /*bNumInterfaces: 1 interface*/
+  0x02,         /*bNumInterfaces: 2 interfaces*/
   0x01,         /*bConfigurationValue: Configuration value*/
   0x00,         /*iConfiguration: Index of string descriptor describing
   the configuration*/
@@ -282,6 +307,15 @@ __ALIGN_BEGIN static uint8_t USBD_HID_OtherSpeedCfgDesc[USB_HID_CONFIG_DESC_SIZ]
   0x00,
   HID_FS_BINTERVAL,          /*bInterval: Polling Interval */
   /* 34 */
+  /* Interface 1: vendor WebHID, not a keyboard. */
+  0x09, USB_DESC_TYPE_INTERFACE,
+  0x01, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00,
+  0x09, HID_DESCRIPTOR_TYPE, 0x11, 0x01, 0x00, 0x01,
+  HID_REPORT_DESC, WEBHID_REPORT_DESC_SIZE, 0x00,
+  0x07, USB_DESC_TYPE_ENDPOINT, WEBHID_EPIN_ADDR, 0x03,
+  WEBHID_PACKET_SIZE, 0x00, HID_FS_BINTERVAL,
+  0x07, USB_DESC_TYPE_ENDPOINT, WEBHID_EPOUT_ADDR, 0x03,
+  WEBHID_PACKET_SIZE, 0x00, HID_FS_BINTERVAL,
 };
 
 
@@ -298,6 +332,12 @@ __ALIGN_BEGIN static uint8_t USBD_HID_Desc[USB_HID_DESC_SIZ]  __ALIGN_END  =
   0x22,         /*bDescriptorType*/
   HID_MOUSE_REPORT_DESC_SIZE,/*wItemLength: Total length of Report descriptor*/
   0x00,
+};
+
+__ALIGN_BEGIN static uint8_t USBD_WEBHID_Desc[USB_HID_DESC_SIZ] __ALIGN_END =
+{
+  0x09, HID_DESCRIPTOR_TYPE, 0x11, 0x01, 0x00, 0x01,
+  HID_REPORT_DESC, WEBHID_REPORT_DESC_SIZE, 0x00
 };
 
 /* USB Standard Device Descriptor */
@@ -365,6 +405,16 @@ __ALIGN_BEGIN static uint8_t HID_MOUSE_ReportDesc[HID_MOUSE_REPORT_DESC_SIZE]  _
 /** @defgroup USBD_HID_Private_Functions
   * @{
   */
+
+/* Dedicated vendor page with 32-byte input and output reports. */
+__ALIGN_BEGIN static uint8_t WEBHID_ReportDesc[WEBHID_REPORT_DESC_SIZE] __ALIGN_END =
+{
+  0x06, 0x60, 0xFF, 0x09, 0x61, 0xA1, 0x01,
+  0x15, 0x00, 0x26, 0xFF, 0x00,
+  0x75, 0x08, 0x95, WEBHID_PACKET_SIZE,
+  0x09, 0x62, 0x81, 0x02,
+  0x09, 0x63, 0x91, 0x02, 0xC0
+};
 
 /**
   * @brief  USBD_HID_Init
