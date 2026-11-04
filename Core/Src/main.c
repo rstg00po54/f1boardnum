@@ -263,18 +263,21 @@ static const KeyMapEntry g_keymap[] =
   {0x21U, 2U, 3U, 0U,                  0U, LED_NONE},
   {0x21U, 3U, 3U, 0U,         HID_MOD_RGUI, LED_NONE},
 
-  /* Numpad 0: U3 KEY1/KEY2 are electrically isolated in the current PCB.
-   * Solder U3 KEY1 to MCP 0x21 C0/GP7 and U3 KEY2 to MCP 0x21 R0/GP3
-   * (unused intersection) before expecting this input to work.
-   * LED87 already belongs to U3 in the 17-pixel serial chain.
+  /* Numpad 0: the user-approved 2026-11-03 physical wiring is on
+   * the direction board (MCP 0x20), NOT MCP 0x21:
+   * U3 KEY1 -> PgDn/U88 K1 (direction-board column C2)
+   * U3 KEY2 -> Up/U93   K2 (direction-board row R3).
+   * R3/C2 is unused by the direction-board keys. Respect diode
+   * orientation; this key is not physically connected until wired.
+   * U3 RGB is pixel #87 in the existing serial LED chain.
    */
-  {0x21U, 0U, 0U, HID_KEY_KP_0,        0U, 87U},
+  {0x20U, 3U, 2U, HID_KEY_KP_0,        0U, 87U},
 
   /* 0x27: 键盘87_小键盘. Verified from EasyEDA Pro PCB PAD_NET.
    * MCP GP7..GP4 = C0..C3; GP3..GP0 = R0..R3.
    * The extra U3 switch connects to isolated KEY1/KEY2 nets and has
    * no MCP 0x27 matrix connection. Keypad 0 is mapped to the unused
-   * 0x21 R0/C0 slot above, pending its two external switch-contact wires.
+   * direction-board 0x20 R3/C2 slot above, as previously agreed.
    */
   {0x27U, 0U, 0U, HID_KEY_KP_NUM_LOCK, 0U, LED_NONE}, /* U1  Num */
   {0x27U, 0U, 1U, HID_KEY_KP_7,        0U, LED_NONE}, /* U2  7 */
