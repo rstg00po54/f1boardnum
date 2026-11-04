@@ -2,7 +2,7 @@ name: KeyFlux Windows Qt Build
 
 on:
   push:
-    branches: [keyflux_qt, keyflux_hw_i2c]
+    branches: [keyflux_qt, keyflux_hw_i2c, keyflux_numpad_led_test]
     paths:
       - "desktop/KeyFlux/**"
       - ".github/workflows/keyflux-windows.yml"
