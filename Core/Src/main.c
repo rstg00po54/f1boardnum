@@ -156,6 +156,7 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 #define HID_KEY_KP_7                 0x5FU
 #define HID_KEY_KP_8                 0x60U
 #define HID_KEY_KP_9                 0x61U
+#define HID_KEY_KP_0                 0x62U
 #define HID_KEY_KP_DOT               0x63U
 
 #define HID_MOD_LCTRL                0x01U
@@ -262,10 +263,18 @@ static const KeyMapEntry g_keymap[] =
   {0x21U, 2U, 3U, 0U,                  0U, LED_NONE},
   {0x21U, 3U, 3U, 0U,         HID_MOD_RGUI, LED_NONE},
 
+  /* Numpad 0: U3 KEY1/KEY2 are electrically isolated in the current PCB.
+   * Solder U3 KEY1 to MCP 0x21 C0/GP7 and U3 KEY2 to MCP 0x21 R0/GP3
+   * (unused intersection) before expecting this input to work.
+   * LED87 already belongs to U3 in the 17-pixel serial chain.
+   */
+  {0x21U, 0U, 0U, HID_KEY_KP_0,        0U, 87U},
+
   /* 0x27: 键盘87_小键盘. Verified from EasyEDA Pro PCB PAD_NET.
    * MCP GP7..GP4 = C0..C3; GP3..GP0 = R0..R3.
    * The extra U3 switch connects to isolated KEY1/KEY2 nets and has
-   * no MCP matrix connection. No keypad-0 switch is wired here.
+   * no MCP 0x27 matrix connection. Keypad 0 is mapped to the unused
+   * 0x21 R0/C0 slot above, pending its two external switch-contact wires.
    */
   {0x27U, 0U, 0U, HID_KEY_KP_NUM_LOCK, 0U, LED_NONE}, /* U1  Num */
   {0x27U, 0U, 1U, HID_KEY_KP_7,        0U, LED_NONE}, /* U2  7 */
@@ -301,15 +310,13 @@ static uint8_t g_scan_raw_rbits[MCP23008_COUNT][4];
 static uint8_t g_matrix_prev_rbits[MCP23008_COUNT][4];
 static uint8_t g_led6028[LED6028_COUNT][3];
 
-/* RGB spatial mapping: VERIFIED by the user's row-by-row hardware test.
- * LED #0..70 are the five-piece 87-key main board (not independent numpad).
- * X uses half-key units (0..34); Y is visible row (0..4).
- * The serial data chain order jumps between PCB regions and must NOT be used
- * to calculate a visually coherent rainbow.  Preserve raw LED numbering for
- * 0x07 diagnostic commands and preserve the original 100-pixel chain size.
+/* RGB physical coordinates: LEDs 0..70 main + 71..87 numpad.
+ * Both use the same X half-key unit coordinate; row Y is 0..4.
+ * Numpad X=38..44, main X=0..34. Keep the original 100 LED output size:
+ * LED88..99 remain spatially unmapped until their wiring is confirmed.
  */
-#define LED6028_SPATIAL_COUNT        71U
-#define LED6028_SPATIAL_X_PERIOD     36U
+#define LED6028_SPATIAL_COUNT        88U
+#define LED6028_SPATIAL_X_PERIOD     46U
 #define LED6028_SPATIAL_Y_PERIOD      5U
 typedef struct
 {
@@ -389,6 +396,25 @@ static const LED6028_Position g_led6028_xy[LED6028_SPATIAL_COUNT] =
   { 0U, 4U}, /* LED #68 Ctrl-L */
   { 3U, 4U}, /* LED #69 Win-L */
   { 5U, 4U}, /* LED #70 Alt-L */
+
+  /* Numpad DIN->DOUT order verified from supplied PCB, indices 71..87. */
+  {38U, 0U}, /* LED #71 Num */
+  {40U, 0U}, /* LED #72 / */
+  {42U, 0U}, /* LED #73 * */
+  {44U, 0U}, /* LED #74 - */
+  {38U, 1U}, /* LED #75 7 */
+  {40U, 1U}, /* LED #76 8 */
+  {42U, 1U}, /* LED #77 9 */
+  {44U, 2U}, /* LED #78 + (middle of two rows) */
+  {38U, 2U}, /* LED #79 4 */
+  {40U, 2U}, /* LED #80 5 */
+  {42U, 2U}, /* LED #81 6 */
+  {44U, 4U}, /* LED #82 Enter (middle of two rows) */
+  {38U, 3U}, /* LED #83 1 */
+  {40U, 3U}, /* LED #84 2 */
+  {42U, 3U}, /* LED #85 3 */
+  {42U, 4U}, /* LED #86 . */
+  {39U, 4U}, /* LED #87 0 / U3 */
 };
 
 
@@ -1743,7 +1769,7 @@ static void Keyboard_UpdateLEDs(uint32_t now)
       }
       else
       {
-        /* Unmapped extra LEDs (numpad or future expansion): leave working
+        /* Unmapped LED88..99: leave working
          * with the previous wire-index rainbow until their physical layout
          * is verified in hardware.
          */
