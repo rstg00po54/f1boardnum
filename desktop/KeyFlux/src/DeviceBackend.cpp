@@ -2,6 +2,7 @@
 
 #include <QElapsedTimer>
 #include <QMutexLocker>
+#include <QSettings>
 #include <QtMath>
 #include <hidapi.h>
 
@@ -182,6 +183,14 @@ void HidWorker::run()
 
 DeviceBackend::DeviceBackend(QObject *parent) : QObject(parent)
 {
+    // The .epro PCB confirms 17 serial pixels. Numpad chain may begin
+    // after main keyboard's 71 LEDs, but board-to-board wiring can differ.
+    // Keep start index adjustable; never assume an unverified electrical
+    // connection is correct.
+    QSettings settings(QStringLiteral("KeyFlux"), QStringLiteral("Studio"));
+    const int savedBase = settings.value(QStringLiteral("numpad/ledBase"), 71).toInt();
+    m_numpadLedBase = std::clamp(savedBase, 0, 83);
+
     m_settings[1].mode = 1;
     m_settings[1].brightness = 170;
     m_settings[1].speed = 120;
@@ -360,6 +369,16 @@ void DeviceBackend::testLed(int index)
 {
     if (m_selected != 0 || !connected() || index < 0 || index > 99) return;
     send(0, packet({0x07, 0x01, static_cast<unsigned char>(index), 48, 0, 0}));
+}
+
+void DeviceBackend::setNumpadLedBase(int base)
+{
+    const int bounded = std::clamp(base, 0, 83); // 17 LEDs, indices must stay <=99.
+    if (bounded == m_numpadLedBase) return;
+    m_numpadLedBase = bounded;
+    QSettings settings(QStringLiteral("KeyFlux"), QStringLiteral("Studio"));
+    settings.setValue(QStringLiteral("numpad/ledBase"), bounded);
+    emit stateChanged();
 }
 void DeviceBackend::stopTest()
 {
