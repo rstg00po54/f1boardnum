@@ -51,7 +51,7 @@ ApplicationWindow {
     // From the real EasyEDA Pro PCB PAD_NET topology (DIN -> ... -> DOUT):
     // 0 Num, 1 /, 2 *, 3 -, 4 7, 5 8, 6 9, 7 +,
     // 8 4, 9 5, 10 6, 11 Enter, 12 1, 13 2, 14 3, 15 .,
-    // 16 U3 (physical 0 key LED; switch needs 0x21 R0/C0 jumpers).
+    // 16 U3 (physical 0 key LED; switch uses direction 0x20 R3/C2).
     // These are RELATIVE indices. Absolute start defaults to 71 and can
     // be corrected in the UI after observing the actual serial wiring.
     property int numpadSelectedLed: -1
@@ -775,7 +775,7 @@ ApplicationWindow {
                                 }
                                 Text {
                                     Layout.fillWidth: true
-                                    text: "0 键 RGB #87 已纳入空间灯效；实体按键还需补线：U3 KEY1→0x21 C0/GP7，KEY2→0x21 R0/GP3。"
+                                    text: "0 键 RGB #87 已纳入空间灯效；实体按键按昨日方案接线：U3 KEY1→方向板 PgDn(U88) K1，KEY2→↑(U93) K2（0x20 R3/C2）。"
                                     wrapMode: Text.WordWrap
                                     color: root.textMuted
                                     font.pixelSize: 11
