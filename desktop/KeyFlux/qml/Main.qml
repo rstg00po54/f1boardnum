@@ -48,6 +48,38 @@ ApplicationWindow {
         [68,69,70,54,34,22,23,19,6,7,8]
     ]
 
+    // From the real EasyEDA Pro PCB PAD_NET topology (DIN -> ... -> DOUT):
+    // 0 Num, 1 /, 2 *, 3 -, 4 7, 5 8, 6 9, 7 +,
+    // 8 4, 9 5, 10 6, 11 Enter, 12 1, 13 2, 14 3, 15 .,
+    // 16 U3 (physical 0-position LED; switch not in MCP 0x27 matrix).
+    // These are RELATIVE indices. Absolute start defaults to 71 and can
+    // be corrected in the UI after observing the actual serial wiring.
+    property int numpadSelectedLed: -1
+    readonly property var numpadPixels: [
+        {name:"Num", pixel:0, row:0, col:0},
+        {name:"/", pixel:1, row:0, col:1},
+        {name:"*", pixel:2, row:0, col:2},
+        {name:"-", pixel:3, row:0, col:3},
+        {name:"7", pixel:4, row:1, col:0},
+        {name:"8", pixel:5, row:1, col:1},
+        {name:"9", pixel:6, row:1, col:2},
+        {name:"+", pixel:7, row:1, col:3, rowSpan:2},
+        {name:"4", pixel:8, row:2, col:0},
+        {name:"5", pixel:9, row:2, col:1},
+        {name:"6", pixel:10, row:2, col:2},
+        {name:"Enter", pixel:11, row:3, col:3, rowSpan:2},
+        {name:"1", pixel:12, row:3, col:0},
+        {name:"2", pixel:13, row:3, col:1},
+        {name:"3", pixel:14, row:3, col:2},
+        {name:".", pixel:15, row:4, col:2},
+        {name:"0*", pixel:16, row:4, col:0, colSpan:2}
+    ]
+    function selectNumpadPixel(relativeIndex) {
+        if (backend.selectedDevice !== 0 || !backend.multiConnected) return
+        numpadSelectedLed = relativeIndex
+        backend.testLed(backend.numpadLedBase + relativeIndex)
+    }
+
     function previewColor(column, row, totalColumns) {
         if (backend.mode === 0) return "#202a40"
         if (backend.mode === 2 || (backend.selectedDevice === 1 && backend.mode === 1))
@@ -479,6 +511,172 @@ ApplicationWindow {
                                             border.color: "#526a90"
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Panel {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 30
+                    Layout.rightMargin: 30
+                    Layout.preferredHeight: 330
+                    visible: backend.selectedDevice === 0
+                    color: "#131f35"
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 18
+                        spacing: 11
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 12
+                            Text {
+                                text: "数字小键盘 RGB · 实物单灯测试"
+                                color: root.textPrimary
+                                font.pixelSize: 16
+                                font.bold: true
+                            }
+                            Rectangle {
+                                width: 96
+                                height: 22
+                                radius: 11
+                                color: "#23395a"
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "17 颗 · PCB 已核对"
+                                    color: "#aaccff"
+                                    font.pixelSize: 10
+                                }
+                            }
+                            Item { Layout.fillWidth: true }
+                            Text { text: "起始 LED 编号"; color: root.textMuted; font.pixelSize: 12 }
+                            SpinBox {
+                                id: numpadStart
+                                from: 0
+                                to: 83
+                                editable: true
+                                value: backend.numpadLedBase
+                                onValueModified: {
+                                    backend.setNumpadLedBase(value)
+                                    root.numpadSelectedLed = -1
+                                }
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "原理图串联顺序：Num → / → * → - → 7 → 8 → 9 → + → 4 → 5 → 6 → Enter → 1 → 2 → 3 → . → U3"
+                            font.pixelSize: 11
+                            color: root.textMuted
+                            wrapMode: Text.WordWrap
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            spacing: 28
+                            GridLayout {
+                                id: numpadLayout
+                                columns: 4
+                                rows: 5
+                                rowSpacing: 5
+                                columnSpacing: 5
+                                Repeater {
+                                    model: root.numpadPixels
+                                    delegate: Rectangle {
+                                        id: numpadCap
+                                        readonly property int pixel: modelData.pixel
+                                        Layout.row: modelData.row
+                                        Layout.column: modelData.col
+                                        Layout.rowSpan: modelData.rowSpan || 1
+                                        Layout.columnSpan: modelData.colSpan || 1
+                                        Layout.preferredWidth: 62 * (modelData.colSpan || 1)
+                                            + 5 * ((modelData.colSpan || 1) - 1)
+                                        Layout.preferredHeight: 34 * (modelData.rowSpan || 1)
+                                            + 5 * ((modelData.rowSpan || 1) - 1)
+                                        radius: 7
+                                        color: root.numpadSelectedLed === pixel ? "#963943"
+                                             : root.previewColor(modelData.col, modelData.row, 4)
+                                        border.color: root.numpadSelectedLed === pixel ? "#ffb1af" : "#597194"
+                                        border.width: root.numpadSelectedLed === pixel ? 2 : 1
+                                        opacity: backend.multiConnected ? 1.0 : 0.55
+                                        Column {
+                                            anchors.centerIn: parent
+                                            spacing: 2
+                                            Text {
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                text: modelData.name
+                                                font.pixelSize: 12
+                                                font.bold: true
+                                                color: "#0b1425"
+                                            }
+                                            Text {
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                text: "#" + (backend.numpadLedBase + numpadCap.pixel)
+                                                font.pixelSize: 10
+                                                color: "#0b1425"
+                                            }
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            enabled: backend.multiConnected
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: root.selectNumpadPixel(numpadCap.pixel)
+                                        }
+                                    }
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignTop
+                                spacing: 14
+                                Text {
+                                    text: root.numpadSelectedLed < 0
+                                        ? "点击左侧键帽测试单颗灯"
+                                        : "当前测试：#" + (backend.numpadLedBase + root.numpadSelectedLed)
+                                    color: root.textPrimary
+                                    font.pixelSize: 14
+                                    font.bold: true
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "起始编号默认 71，代表小键盘接在主键盘 71 颗灯之后。若实物不是这个接法，可调整编号后逐灯核对。"
+                                    color: root.textMuted
+                                    wrapMode: Text.WordWrap
+                                    font.pixelSize: 12
+                                }
+                                RowLayout {
+                                    spacing: 10
+                                    ActionButton {
+                                        text: "上一颗"
+                                        enabled: backend.multiConnected
+                                        onClicked: root.selectNumpadPixel(
+                                            (root.numpadSelectedLed <= 0 ? 16 : root.numpadSelectedLed - 1))
+                                    }
+                                    ActionButton {
+                                        text: "下一颗"
+                                        enabled: backend.multiConnected
+                                        primary: true
+                                        onClicked: root.selectNumpadPixel(
+                                            (root.numpadSelectedLed + 1) % 17)
+                                    }
+                                    ActionButton {
+                                        text: "停止测试"
+                                        enabled: backend.multiConnected
+                                        onClicked: {
+                                            backend.stopTest()
+                                            root.numpadSelectedLed = -1
+                                        }
+                                    }
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "* U3 位于数字 0 的物理位置，原 PCB 没接 MCP 键盘矩阵，但它的 RGB 已接入 17 颗灯链。"
+                                    wrapMode: Text.WordWrap
+                                    color: root.textMuted
+                                    font.pixelSize: 11
                                 }
                             }
                         }
