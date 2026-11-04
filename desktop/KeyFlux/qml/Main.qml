@@ -51,7 +51,7 @@ ApplicationWindow {
     // From the real EasyEDA Pro PCB PAD_NET topology (DIN -> ... -> DOUT):
     // 0 Num, 1 /, 2 *, 3 -, 4 7, 5 8, 6 9, 7 +,
     // 8 4, 9 5, 10 6, 11 Enter, 12 1, 13 2, 14 3, 15 .,
-    // 16 U3 (physical 0-position LED; switch not in MCP 0x27 matrix).
+    // 16 U3 (physical 0 key LED; switch needs 0x21 R0/C0 jumpers).
     // These are RELATIVE indices. Absolute start defaults to 71 and can
     // be corrected in the UI after observing the actual serial wiring.
     property int numpadSelectedLed: -1
@@ -72,12 +72,114 @@ ApplicationWindow {
         {name:"2", pixel:13, row:3, col:1},
         {name:"3", pixel:14, row:3, col:2},
         {name:".", pixel:15, row:4, col:2},
-        {name:"0*", pixel:16, row:4, col:0, colSpan:2}
+        {name:"0", pixel:16, row:4, col:0, colSpan:2}
     ]
     function selectNumpadPixel(relativeIndex) {
         if (backend.selectedDevice !== 0 || !backend.multiConnected) return
         numpadSelectedLed = relativeIndex
         backend.testLed(backend.numpadLedBase + relativeIndex)
+    }
+
+    // Same 88 physical XY coordinates as STM32 firmware.
+    readonly property var spatialPixelCoordinates: [
+        [30, 0],
+        [32, 0],
+        [34, 0],
+        [30, 1],
+        [32, 1],
+        [34, 1],
+        [30, 4],
+        [32, 4],
+        [34, 4],
+        [32, 3],
+        [22, 0],
+        [24, 0],
+        [26, 0],
+        [23, 1],
+        [25, 1],
+        [27, 1],
+        [22, 2],
+        [24, 2],
+        [26, 2],
+        [26, 4],
+        [22, 3],
+        [26, 3],
+        [22, 4],
+        [24, 4],
+        [16, 0],
+        [18, 0],
+        [20, 0],
+        [15, 1],
+        [17, 1],
+        [19, 1],
+        [21, 1],
+        [16, 2],
+        [18, 2],
+        [20, 2],
+        [20, 4],
+        [14, 3],
+        [16, 3],
+        [18, 3],
+        [20, 3],
+        [8, 0],
+        [10, 0],
+        [12, 0],
+        [14, 0],
+        [7, 1],
+        [9, 1],
+        [11, 1],
+        [13, 1],
+        [8, 2],
+        [10, 2],
+        [12, 2],
+        [14, 2],
+        [8, 3],
+        [10, 3],
+        [12, 3],
+        [12, 4],
+        [0, 0],
+        [2, 0],
+        [4, 0],
+        [6, 0],
+        [1, 1],
+        [3, 1],
+        [5, 1],
+        [2, 2],
+        [4, 2],
+        [6, 2],
+        [0, 3],
+        [4, 3],
+        [6, 3],
+        [0, 4],
+        [3, 4],
+        [5, 4],
+        [38, 0],
+        [40, 0],
+        [42, 0],
+        [44, 0],
+        [38, 1],
+        [40, 1],
+        [42, 1],
+        [44, 2],
+        [38, 2],
+        [40, 2],
+        [42, 2],
+        [44, 4],
+        [38, 3],
+        [40, 3],
+        [42, 3],
+        [42, 4],
+        [39, 4]
+    ]
+    function spatialPreviewColor(ledIndex) {
+        if (backend.mode !== 3 && backend.mode !== 4)
+            return previewColor(ledIndex % 17, Math.floor(ledIndex / 17), 17)
+        if (ledIndex < 0 || ledIndex >= spatialPixelCoordinates.length)
+            return previewColor(ledIndex % 17, Math.floor(ledIndex / 17), 17)
+        var pos = spatialPixelCoordinates[ledIndex]
+        var h = (backend.mode === 3 ? pos[0] / 46.0 : pos[1] / 5.0) - phase
+        h = (h % 1.0 + 1.0) % 1.0
+        return Qt.hsla(h, 0.77, 0.59, 1.0)
     }
 
     function previewColor(column, row, totalColumns) {
@@ -432,14 +534,14 @@ ApplicationWindow {
                                 width: 100; height: 22; radius: 11; color: "#23395a"
                                 Text {
                                     anchors.centerIn: parent
-                                    text: backend.selectedDevice === 0 ? "71 颗已映射" : "RGB Matrix"
+                                    text: backend.selectedDevice === 0 ? "88 颗已映射" : "RGB Matrix"
                                     color: "#aaccff"; font.pixelSize: 10
                                 }
                             }
                         }
                         Text {
                             text: backend.selectedDevice === 0 ?
-                                "按实际 PCB 位置排列 · 点击按键可单颗定位（红色）" :
+                                "71 颗主键盘 + 17 颗数字小键盘 · 两区统一空间彩虹" :
                                 "V6 Max 灯光示意 · 具体颜色以键盘实物为准"
                             font.pixelSize: 11
                             color: root.textMuted
@@ -475,7 +577,7 @@ ApplicationWindow {
                                                     width: label === "Space" ? 136 : label === "Shift" ? 72 : 48
                                                     height: 35
                                                     radius: 6
-                                                    color: root.previewColor(index, keyRow.rowIndex, root.keyNames[keyRow.rowIndex].length)
+                                                    color: root.spatialPreviewColor(keyCap.ledIndex)
                                                     border.color: "#597194"
                                                     border.width: 1
                                                     opacity: backend.mode === 0 ? 0.55 : 0.90
@@ -598,7 +700,7 @@ ApplicationWindow {
                                             + 5 * ((modelData.rowSpan || 1) - 1)
                                         radius: 7
                                         color: root.numpadSelectedLed === pixel ? "#963943"
-                                             : root.previewColor(modelData.col, modelData.row, 4)
+                                             : root.spatialPreviewColor(71 + pixel)
                                         border.color: root.numpadSelectedLed === pixel ? "#ffb1af" : "#597194"
                                         border.width: root.numpadSelectedLed === pixel ? 2 : 1
                                         opacity: backend.multiConnected ? 1.0 : 0.55
@@ -673,7 +775,7 @@ ApplicationWindow {
                                 }
                                 Text {
                                     Layout.fillWidth: true
-                                    text: "* U3 位于数字 0 的物理位置，原 PCB 没接 MCP 键盘矩阵，但它的 RGB 已接入 17 颗灯链。"
+                                    text: "0 键 RGB #87 已纳入空间灯效；实体按键还需补线：U3 KEY1→0x21 C0/GP7，KEY2→0x21 R0/GP3。"
                                     wrapMode: Text.WordWrap
                                     color: root.textMuted
                                     font.pixelSize: 11
