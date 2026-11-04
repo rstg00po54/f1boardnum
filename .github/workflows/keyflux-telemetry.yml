@@ -1,8 +1,8 @@
-name: KeyFlux STM32 Hardware I2C1 400kHz
+name: KeyFlux STM32 88RGB Numpad
 
 on:
   push:
-    branches: [keyflux_telemetry, keyflux_hw_i2c]
+    branches: [keyflux_telemetry, keyflux_hw_i2c, keyflux_numpad_spatial_zero]
     paths:
       - "Core/**"
       - "build_flash.sh"
@@ -41,7 +41,7 @@ jobs:
       - name: Upload telemetry firmware for hardware testing
         uses: actions/upload-artifact@v4
         with:
-          name: f1board-hardware-i2c1-400khz-firmware
+          name: f1board-88rgb-numpad0-firmware
           path: |
             build/Release/f1board.elf
             build/Release/f1board.bin
