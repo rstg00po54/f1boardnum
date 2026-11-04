@@ -52,6 +52,7 @@ class DeviceBackend final : public QObject
     Q_PROPERTY(QString color READ color NOTIFY stateChanged)
     Q_PROPERTY(QString info READ info NOTIFY stateChanged)
     Q_PROPERTY(QString logs READ logs NOTIFY logsChanged)
+    Q_PROPERTY(int numpadLedBase READ numpadLedBase NOTIFY stateChanged)
     Q_PROPERTY(bool saved READ saved NOTIFY stateChanged)
     Q_PROPERTY(bool logControlSupported READ logControlSupported NOTIFY stateChanged)
     Q_PROPERTY(bool loggingEnabled READ loggingEnabled NOTIFY stateChanged)
@@ -78,6 +79,7 @@ public:
     QString color() const { return m_settings[m_selected].color; }
     QString info() const { return m_info[m_selected]; }
     QString logs() const { return m_logs; }
+    int numpadLedBase() const { return m_numpadLedBase; }
     bool saved() const { return m_selected == 0 && m_multiSaved; }
     bool logControlSupported() const { return m_selected == 1 && m_keychronLogSupported; }
     bool loggingEnabled() const { return m_logging[m_selected]; }
@@ -100,6 +102,7 @@ public:
     Q_INVOKABLE void setLogging(bool enabled);
     Q_INVOKABLE void testLed(int index);
     Q_INVOKABLE void stopTest();
+    Q_INVOKABLE void setNumpadLedBase(int base);
     Q_INVOKABLE void clearLogs();
 
 signals:
@@ -147,4 +150,5 @@ private:
     Metrics m_metrics;
     QString m_logs;
     QByteArray m_multiPadLogBuffer; // Reassembles 0x80 HID fragments through LF.
+    int m_numpadLedBase = 71; // Physical 17-pixel chain offset, user adjustable.
 };
